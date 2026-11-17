@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+bun.lock
+package-lock.json
+
+# Environment & Secrets
+.env
+.env.*
+ca.crt
+ca.key
+cert.crt
+cert.key
+
+# Build outputs
+dist/
+dev-dist/
+
+# IDE & OS files
+.vscode/
+.kilo/
+*.jpg
+*.sql
+*.json
+*.md
+*.py
+*.txt
+*.code-workspace

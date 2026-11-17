@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="habinoDesktopGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2aa99d"/>
+      <stop offset="100%" stop-color="#b79a4a"/>
+    </linearGradient>
+    <linearGradient id="habinoDesktopAccent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d4bd70"/>
+      <stop offset="100%" stop-color="#9f8439"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#habinoDesktopGrad)"/>
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#fff" stroke-opacity=".08" stroke-width="2"/>
+  <circle cx="256" cy="256" r="120" fill="none" stroke="#fff" stroke-opacity=".1" stroke-width="2"/>
+  <g>
+    <rect x="136" y="136" width="56" height="240" rx="24" fill="#fff"/>
+    <rect x="320" y="136" width="56" height="240" rx="24" fill="#fff"/>
+    <rect x="136" y="232" width="240" height="48" rx="20" fill="#fff"/>
+    <circle cx="256" cy="256" r="28" fill="url(#habinoDesktopAccent)" stroke="#fff" stroke-width="6"/>
+    <path d="M320 180l56-56m0 0h-36m36 0v36" stroke="url(#habinoDesktopAccent)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

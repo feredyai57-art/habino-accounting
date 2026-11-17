@@ -1,0 +1,833 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --habino-turquoise: #2aa99d;
+    --habino-turquoise-soft: #bde5de;
+    --habino-mustard: #b79a4a;
+    --habino-mustard-soft: #eadcae;
+    --habino-purple: #76539b;
+    --habino-purple-soft: #d9c9e8;
+  }
+
+  body {
+    font-family: 'Vazirmatn', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  }
+
+  :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea) {
+    background-color: #ffffff !important;
+    border-color: var(--habino-turquoise-soft) !important;
+    color: #233b45 !important;
+    accent-color: var(--habino-mustard);
+    transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+  }
+
+  :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea)::placeholder {
+    color: #78909a !important;
+  }
+
+  :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea):focus {
+    border-color: var(--habino-purple) !important;
+    box-shadow: 0 0 0 3px rgba(42, 169, 157, 0.16), 0 0 0 5px rgba(118, 83, 155, 0.1) !important;
+    outline: none !important;
+  }
+
+  :where(input[type='checkbox'], input[type='radio']) {
+    accent-color: var(--habino-mustard);
+  }
+
+  :where(input:disabled, select:disabled, textarea:disabled) {
+    background-color: #f1f7f6 !important;
+    color: #78909a !important;
+    border-color: #d7e9e5 !important;
+  }
+
+  .dark :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea) {
+    background-color: #162a31 !important;
+    border-color: #347d79 !important;
+    color: #e4f4f1 !important;
+  }
+
+  [data-theme='dark'] :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea) {
+    background-color: #162a31 !important;
+    border-color: #347d79 !important;
+    color: #e4f4f1 !important;
+  }
+
+  .dark :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea)::placeholder {
+    color: #9ab8b5 !important;
+  }
+
+  [data-theme='dark'] :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea)::placeholder {
+    color: #9ab8b5 !important;
+  }
+
+  .dark :where(input:disabled, select:disabled, textarea:disabled) {
+    background-color: #20363b !important;
+    color: #9ab8b5 !important;
+    border-color: #355451 !important;
+  }
+
+  [data-theme='dark'] :where(input:disabled, select:disabled, textarea:disabled) {
+    background-color: #20363b !important;
+    color: #9ab8b5 !important;
+    border-color: #355451 !important;
+  }
+
+  [data-theme='dark'] form,
+  [data-theme='dark'] [role='dialog'] {
+    color: #e4f4f1;
+  }
+
+  [data-theme='dark'] form :where(.bg-white, .bg-slate-50, .bg-slate-100),
+  [data-theme='dark'] [role='dialog'] :where(.bg-white, .bg-slate-50, .bg-slate-100) {
+    background-color: #162a31 !important;
+  }
+
+  [data-theme='dark'] form :where(.text-slate-700, .text-slate-800, .text-slate-900),
+  [data-theme='dark'] [role='dialog'] :where(.text-slate-700, .text-slate-800, .text-slate-900) {
+    color: #e4f4f1 !important;
+  }
+
+  [data-theme='dark'] main :where(.bg-white, .bg-slate-50, .bg-slate-100) {
+    background-color: #162a31 !important;
+  }
+
+  [data-theme='dark'] main :where(.border-slate-200, .border-slate-300) {
+    border-color: #28545a !important;
+  }
+
+  [data-theme='dark'] main :where(.text-slate-500, .text-slate-600, .text-slate-700, .text-slate-800, .text-slate-900) {
+    color: #c3d8d5 !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [role='dialog'],
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] {
+    background-color: #102a2f !important;
+    border-color: #347d79 !important;
+    color: #e4f4f1 !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [role='dialog'] :where(.bg-white, .bg-slate-50, .bg-slate-100, .bg-slate-200) {
+    background-color: #17383b !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [role='dialog'] :where(.border-slate-200, .border-slate-300, .border-slate-400) {
+    border-color: #347d79 !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [role='dialog'] :where(.text-slate-500, .text-slate-600, .text-slate-700, .text-slate-800, .text-slate-900) {
+    color: #c7e4df !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.bg-white, .bg-slate-50, .bg-slate-100, .bg-slate-200) {
+    background-color: #17383b !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.border-slate-200, .border-slate-300, .border-slate-400) {
+    border-color: #347d79 !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.text-slate-400, .text-slate-500, .text-slate-600, .text-slate-700, .text-slate-800, .text-slate-900) {
+    color: #c7e4df !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.bg-blue-50, .bg-indigo-50, .bg-violet-50) {
+    background-color: #f1eafa !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.text-blue-600, .text-blue-700, .text-indigo-500, .text-indigo-600, .text-indigo-700, .text-violet-600) {
+    color: #c19ad9 !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.border-blue-200, .border-indigo-100, .border-indigo-200) {
+    border-color: #76539b !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.bg-emerald-50, .bg-green-50) {
+    background-color: #e8f7f5 !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.text-emerald-600, .text-emerald-700, .text-green-600, .text-green-700) {
+    color: #238e83 !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.bg-amber-50, .bg-yellow-50) {
+    background-color: #fff9e8 !important;
+  }
+
+  [data-theme='dark'] #habino-desktop-environment [data-desktop-window] :where(.text-amber-600, .text-amber-700, .text-yellow-600, .text-yellow-700) {
+    color: #b79a4a !important;
+  }
+
+  .dark :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea):focus {
+    border-color: #a884c4 !important;
+    box-shadow: 0 0 0 3px rgba(88, 198, 183, 0.18), 0 0 0 5px rgba(168, 132, 196, 0.14) !important;
+  }
+
+  [data-theme='dark'] :where(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']), select, textarea):focus {
+    border-color: #a884c4 !important;
+    box-shadow: 0 0 0 3px rgba(88, 198, 183, 0.18), 0 0 0 5px rgba(168, 132, 196, 0.14) !important;
+  }
+}
+
+/* Habino Landing Page & Ecosystem Styles */
+.ai-gradient {
+  background: linear-gradient(135deg, #0284c7 0%, #4f46e5 50%, #7c3aed 100%);
+  background-size: 200% 200%;
+  animation: gradShift 8s ease infinite;
+}
+@keyframes gradShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #4338ca 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.dark .gradient-text {
+  background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.product-gradient {
+  background: linear-gradient(135deg, #d97706 0%, #dc2626 100%);
+}
+.service-gradient {
+  background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+}
+.project-gradient {
+  background: linear-gradient(135deg, #7c3aed 0%, #db2777 100%);
+}
+
+.aurora {
+  display: none;
+}
+.aurora-blob {
+  display: none;
+}
+
+.grid-pattern {
+  position: absolute;
+  inset: 0;
+  background-image: 
+    linear-gradient(rgba(15, 23, 42, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
+  pointer-events: none;
+}
+.dark .grid-pattern {
+  background-image: 
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+}
+
+.glass {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+}
+.dark .glass {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+.glass-dark {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+}
+
+.glow-btn {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s ease-in-out;
+}
+.glow-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px -5px rgba(2, 132, 199, 0.3);
+}
+
+.shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.badge {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+}
+.dark .badge {
+  background: rgba(30, 58, 138, 0.4);
+  border: 1px solid rgba(96, 165, 250, 0.4);
+  color: #93c5fd;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.status-active {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+.dark .status-active {
+  background: rgba(6, 78, 59, 0.4);
+  color: #6ee7b7;
+  border: 1px solid rgba(52, 211, 153, 0.4);
+}
+
+.status-urgent {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+.dark .status-urgent {
+  background: rgba(127, 29, 29, 0.4);
+  color: #fca5a5;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+}
+
+.status-new {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+.dark .status-new {
+  background: rgba(20, 83, 45, 0.4);
+  color: #86efac;
+  border: 1px solid rgba(74, 222, 128, 0.4);
+}
+
+.trust-badge {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+.dark .trust-badge {
+  background: rgba(20, 83, 45, 0.3);
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  color: #86efac;
+}
+
+.consignment-badge {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+.dark .consignment-badge {
+  background: rgba(120, 53, 15, 0.3);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fcd34d;
+}
+
+.search-bar {
+  background: #ffffff;
+  border: 2px solid #cbd5e1;
+  transition: all 0.2s;
+}
+.search-bar:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 4px 20px -2px rgba(37, 99, 235, 0.15);
+}
+.dark .search-bar {
+  background: #0f172a;
+  border: 2px solid #334155;
+}
+.dark .search-bar:focus-within {
+  border-color: #38bdf8;
+  box-shadow: 0 4px 20px -2px rgba(56, 189, 248, 0.2);
+}
+
+.wallet-card {
+  background: linear-gradient(135deg, #eff6ff 0%, #f5f3ff 100%);
+  border: 1px solid #bfdbfe;
+  position: relative;
+  overflow: hidden;
+}
+.dark .wallet-card {
+  background: linear-gradient(135deg, rgba(30, 58, 138, 0.3) 0%, rgba(88, 28, 135, 0.3) 100%);
+  border: 1px solid rgba(96, 165, 250, 0.3);
+}
+
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #cbd5e1, transparent);
+}
+.dark .section-divider {
+  background: linear-gradient(90deg, transparent, #334155, transparent);
+}
+
+/* Ensure invoice customization modal always floats with highest priority above any invoice preview */
+#habino-invoice-settings-modal {
+  z-index: 99999 !important;
+}
+
+#habino-invoice-print-portal {
+  display: none;
+}
+
+#habino-client-statement-print-portal {
+  display: none;
+}
+
+.trial-balance-print-header {
+  display: none;
+}
+
+.analytics-print-header {
+  display: none;
+}
+
+@media print {
+  body.habino-analytics-print > * {
+    visibility: hidden !important;
+  }
+
+  body.habino-analytics-print > *:not(#root) {
+    display: none !important;
+  }
+
+  body.habino-analytics-print #root {
+    height: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.habino-analytics-print #root * {
+    visibility: hidden !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard,
+  body.habino-analytics-print #financial-analytics-dashboard * {
+    visibility: visible !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 8mm !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard .analytics-print-exclude {
+    display: none !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard .analytics-print-header {
+    display: block !important;
+    margin-bottom: 12px !important;
+    text-align: center !important;
+    color: #0f172a !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard .analytics-print-header h1 {
+    margin: 0 0 5px !important;
+    font-size: 16pt !important;
+    font-weight: 700 !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard .analytics-print-header p {
+    margin: 0 !important;
+    font-size: 9pt !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard .analytics-print-chart {
+    break-inside: avoid !important;
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard .analytics-print-chart .recharts-responsive-container {
+    min-width: 0 !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard .overflow-x-auto,
+  body.habino-analytics-print #financial-analytics-dashboard .overflow-hidden {
+    overflow: visible !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 8pt !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard th,
+  body.habino-analytics-print #financial-analytics-dashboard td {
+    padding: 4px !important;
+    color: #0f172a !important;
+    border-color: #cbd5e1 !important;
+  }
+
+  body.habino-analytics-print #financial-analytics-dashboard tr,
+  body.habino-analytics-print #financial-analytics-dashboard #analytics-kpi-cards > * {
+    break-inside: avoid !important;
+  }
+
+  body.habino-financial-report-print > * {
+    visibility: hidden !important;
+  }
+
+  body.habino-financial-report-print > *:not(#root) {
+    display: none !important;
+  }
+
+  body.habino-financial-report-print #root * {
+    visibility: hidden !important;
+  }
+
+  body.habino-financial-report-print #reports-module {
+    visibility: visible !important;
+  }
+
+  body.habino-financial-report-print #root {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body.habino-financial-report-print #reports-module {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 8mm !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    z-index: 999999 !important;
+  }
+
+  body.habino-financial-report-print #official-report-print-header,
+  body.habino-financial-report-print #official-report-print-header *,
+  body.habino-financial-report-print-pnl #pnl-statement-view,
+  body.habino-financial-report-print-pnl #pnl-statement-view *,
+  body.habino-financial-report-print-trial_balance #trial-balance-view,
+  body.habino-financial-report-print-trial_balance #trial-balance-view *,
+  body.habino-financial-report-print-balance_sheet #balance-sheet-view,
+  body.habino-financial-report-print-balance_sheet #balance-sheet-view *,
+  body.habino-financial-report-print-ratios #financial-ratios-view,
+  body.habino-financial-report-print-ratios #financial-ratios-view * {
+    visibility: visible !important;
+  }
+
+  body.habino-financial-report-print #official-report-print-header {
+    display: block !important;
+    margin: 0 0 12px !important;
+    padding: 0 0 12px !important;
+    text-align: center !important;
+  }
+
+  body.habino-financial-report-print #official-report-print-header h1 {
+    font-size: 16pt !important;
+  }
+
+  body.habino-financial-report-print #reports-module .overflow-hidden {
+    overflow: visible !important;
+  }
+
+  body.habino-ledger-print > * {
+    visibility: hidden !important;
+  }
+
+  body.habino-ledger-print > *:not(#root) {
+    display: none !important;
+  }
+
+  body.habino-ledger-print #root * {
+    visibility: hidden !important;
+  }
+
+  body.habino-ledger-print #ledger-print-content,
+  body.habino-ledger-print #ledger-print-content * {
+    visibility: visible !important;
+  }
+
+  body.habino-ledger-print #ledger-print-content {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  body.habino-ledger-print #ledger-print-content button,
+  body.habino-ledger-print #ledger-print-content input,
+  body.habino-ledger-print #ledger-print-content select {
+    display: none !important;
+  }
+
+  body.habino-ledger-print #ledger-print-content .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  body.habino-ledger-print #ledger-print-content table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    break-inside: auto !important;
+  }
+
+  body.habino-ledger-print #ledger-print-content tr {
+    break-inside: avoid !important;
+  }
+
+  body.habino-ledger-print #ledger-print-content th,
+  body.habino-ledger-print #ledger-print-content td {
+    color: #0f172a !important;
+    border-color: #cbd5e1 !important;
+  }
+
+  body.habino-trial-balance-print > * {
+    visibility: hidden !important;
+  }
+
+  body.habino-trial-balance-print > *:not(#root) {
+    display: none !important;
+  }
+
+  body.habino-trial-balance-print #root {
+    height: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.habino-trial-balance-print #root * {
+    visibility: hidden !important;
+  }
+
+  body.habino-trial-balance-print #trial-balance-print-content,
+  body.habino-trial-balance-print #trial-balance-print-content * {
+    visibility: visible !important;
+  }
+
+  body.habino-trial-balance-print #trial-balance-print-content {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+  }
+
+  body.habino-trial-balance-print #trial-balance-print-content .trial-balance-print-header {
+    display: block !important;
+    margin-bottom: 12px !important;
+    text-align: center !important;
+    color: #0f172a !important;
+  }
+
+  body.habino-trial-balance-print #trial-balance-print-content .trial-balance-print-header h1 {
+    margin: 0 0 6px !important;
+    font-size: 16pt !important;
+    font-weight: 700 !important;
+  }
+
+  body.habino-trial-balance-print #trial-balance-print-content .trial-balance-print-header p {
+    margin: 2px 0 !important;
+    font-size: 9pt !important;
+  }
+
+  body.habino-trial-balance-print #trial-balance-print-content .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  body.habino-trial-balance-print #trial-balance-print-content table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 8pt !important;
+  }
+
+  body.habino-trial-balance-print #trial-balance-print-content th,
+  body.habino-trial-balance-print #trial-balance-print-content td {
+    padding: 4px !important;
+    color: #0f172a !important;
+    border: 1px solid #cbd5e1 !important;
+  }
+
+  body.habino-trial-balance-print #trial-balance-print-content tr {
+    break-inside: avoid !important;
+  }
+
+  body.habino-client-statement-print #root {
+    display: none !important;
+  }
+
+  body.habino-client-statement-print #habino-client-statement-print-portal {
+    display: block !important;
+    width: 100% !important;
+    background: #ffffff !important;
+  }
+
+  #habino-client-statement-print-portal #client-statement-printable {
+    width: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    height: auto !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  #habino-client-statement-print-portal .client-statement-print-header {
+    color: #0f172a !important;
+    background: #ffffff !important;
+    background-image: none !important;
+    border-bottom: 1px solid #cbd5e1 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #habino-client-statement-print-portal .client-statement-print-header h3,
+  #habino-client-statement-print-portal .client-statement-print-header p,
+  #habino-client-statement-print-portal .client-statement-print-header span {
+    color: #0f172a !important;
+  }
+
+  #habino-client-statement-print-portal .client-statement-print-header span {
+    background: #f1f5f9 !important;
+    border-color: #94a3b8 !important;
+  }
+
+  #habino-client-statement-print-portal .overflow-y-auto {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /* Complete isolation: When printing an invoice, hide the entire #root application */
+  body.habino-invoice-modal-open #root,
+  body.habino-print-active #root,
+  body.is-printing-invoice #root,
+  body:has(#habino-invoice-print-portal) #root {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Hide non-printable UI elements */
+  .no-print,
+  header,
+  nav,
+  aside,
+  #top-navbar,
+  .modal-backdrop-nondoc {
+    display: none !important;
+  }
+
+  html, body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Dedicated Print Portal that sits directly under body */
+  #habino-invoice-print-portal {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+  }
+
+  #habino-invoice-print-portal .printable-invoice-container {
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+  }
+
+  /* Base printable invoice sheet */
+  #printable-invoice {
+    background: #ffffff !important;
+    box-shadow: none !important;
+    border: none !important;
+    overflow: visible !important;
+    page-break-after: avoid !important;
+    page-break-inside: avoid !important;
+    /* فشرده‌سازی لایه‌های فونت وزیرمتن جهت افزایش سرعت رندر پرینت در موبایل */
+    font-family: 'Vazirmatn', system-ui, -apple-system, sans-serif !important;
+    text-rendering: optimizeSpeed !important;
+    font-synthesis: none !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
+    font-feature-settings: "kern" 0, "liga" 0 !important;
+  }
+
+  /* A4 Paper Format */
+  #printable-invoice.paper-a4 {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 6mm 10mm !important;
+    font-size: 12px !important;
+  }
+
+  /* A5 Portrait Paper Format */
+  #printable-invoice.paper-a5_portrait {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 4mm 6mm !important;
+    font-size: 10px !important;
+    line-height: 1.3 !important;
+  }
+
+  /* A5 Landscape Paper Format */
+  #printable-invoice.paper-a5_landscape {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 4mm 6mm !important;
+    font-size: 10px !important;
+    line-height: 1.3 !important;
+  }
+
+  /* Prevent table rows and headers from awkward page cuts */
+  #printable-invoice table {
+    page-break-inside: auto;
+  }
+  #printable-invoice tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+}
