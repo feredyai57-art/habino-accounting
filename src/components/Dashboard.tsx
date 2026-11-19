@@ -359,7 +359,7 @@ export const Dashboard: React.FC<{ onNavigate: (tab: string) => void }> = ({ onN
             </p>
           </div>
           <span className="px-3 py-1 bg-amber-200 text-amber-900 rounded-full text-xs font-bold border border-amber-300">
-            مصیفی فعال
+            نظارت فعال
           </span>
         </div>
       )}

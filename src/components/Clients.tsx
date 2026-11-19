@@ -19,14 +19,18 @@ import {
   CheckCircle2,
   AlertCircle,
   FileSpreadsheet,
+  Printer,
   RefreshCw,
   ShieldAlert,
   Scale,
   Cloud
 } from 'lucide-react';
 import { ClientStatementModal } from './ClientStatementModal';
+import { ClientProfilePrintModal } from './ClientProfilePrintModal';
 import { getClientAccountBalance } from '../lib/clientLedger';
 import { getStoredEmployees, PAYROLL_EDIT_EMPLOYEE_KEY } from '../lib/payrollEngine';
+import { OnlineAddressMapPicker } from './common/OnlineAddressMapPicker';
+import { exportClientsDirectoryToCsv } from '../lib/exportUtils';
 
 export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavigateToPayroll }) => {
   const {
@@ -42,8 +46,10 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
     reconcileLedgerAndOpeningBalances,
     syncFromSupabase,
     isSupabaseLive,
-    activeTenantId
+    activeTenantId,
+    hasPermission
   } = useAccounting();
+  const canViewFinancials = hasPermission('accounting:view_reports');
 
   const employees = useMemo<Employee[]>(
     () => getStoredEmployees(activeTenantId),
@@ -76,6 +82,8 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
 
   // Detailed Statement Modal State
   const [statementClient, setStatementClient] = useState<Client | null>(null);
+  const [profileClient, setProfileClient] = useState<Client | null>(null);
+  const [showDirectoryPrint, setShowDirectoryPrint] = useState(false);
 
   // Reconcile State & Feedback Modal
   const [isReconciling, setIsReconciling] = useState(false);
@@ -89,6 +97,9 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
   const [economicCode, setEconomicCode] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
+  const [postalCode, setPostalCode] = useState('');
+  const [latitude, setLatitude] = useState<number | undefined>();
+  const [longitude, setLongitude] = useState<number | undefined>();
   const [type, setType] = useState<'individual' | 'corporate'>('individual');
   const [balance, setBalance] = useState<number>(0);
   const [balanceType, setBalanceType] = useState<'debtor' | 'creditor' | 'zero'>('zero');
@@ -146,6 +157,9 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
     setEconomicCode('');
     setEmail('');
     setAddress('');
+    setPostalCode('');
+    setLatitude(undefined);
+    setLongitude(undefined);
     setType('individual');
     setBalance(0);
     setBalanceType('zero');
@@ -166,6 +180,9 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
     setEconomicCode(client.economicCode || '');
     setEmail(client.email || '');
     setAddress(client.address || '');
+    setPostalCode(client.postalCode || '');
+    setLatitude(client.lat ?? client.latitude);
+    setLongitude(client.lng ?? client.longitude);
     setType(client.type || 'individual');
     setCreditLimit(client.creditLimit || 0);
     setIsBlockedForCredit(client.isBlockedForCredit || false);
@@ -245,6 +262,11 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
       economicCode,
       email,
       address,
+      postalCode,
+      lat: latitude,
+      lng: longitude,
+      latitude,
+      longitude,
       type,
       balance: finalBalance,
       creditLimit: saveFromBasicInfo ? 0 : Number(creditLimit) || 0,
@@ -321,6 +343,26 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setShowDirectoryPrint(true)}
+            disabled={filteredClients.length === 0}
+            className="flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+            title="چاپ دفترچه نشانی طرف‌حساب‌های فیلترشده"
+          >
+            <Printer className="h-3.5 w-3.5" />
+            چاپ دفترچه نشانی
+          </button>
+          <button
+            type="button"
+            onClick={() => exportClientsDirectoryToCsv(filteredClients, clientBalances, settings.currency, canViewFinancials)}
+            disabled={filteredClients.length === 0}
+            className="flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+            title="دریافت CSV دفترچه مخاطبین با رعایت مجوز اطلاعات مالی"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            خروجی CSV
+          </button>
           <button
             type="button"
             onClick={handleCloudSync}
@@ -661,6 +703,24 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
                           <span className="text-slate-700">{client.address}</span>
                         </div>
                       )}
+                      {(client.postalCode || client.lat !== undefined || client.latitude !== undefined) && (
+                        <div className="col-span-2 sm:col-span-4 flex flex-wrap gap-x-6 gap-y-2 border-t border-slate-100 pt-2">
+                          {client.postalCode && (
+                            <div>
+                              <span className="text-[10px] text-slate-400 block">کد پستی:</span>
+                              <span className="font-mono font-medium text-slate-800">{client.postalCode}</span>
+                            </div>
+                          )}
+                          {(client.lat ?? client.latitude) !== undefined && (client.lng ?? client.longitude) !== undefined && (
+                            <div>
+                              <span className="text-[10px] text-slate-400 block">مختصات جغرافیایی:</span>
+                              <span className="font-mono font-medium text-slate-800">
+                                {client.lat ?? client.latitude}, {client.lng ?? client.longitude}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Credit Status & Action Row */}
@@ -684,6 +744,14 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
                         )}
                       </div>
 
+                      <button
+                        type="button"
+                        onClick={() => setProfileClient(client)}
+                        className="flex items-center gap-1.5 px-3.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-700 rounded-xl text-xs font-bold border border-sky-200 transition-colors cursor-pointer shrink-0"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>پروفایل کامل</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => setStatementClient(client)}
@@ -801,7 +869,7 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
             </div>
 
             <div className="flex-1 min-h-0 flex flex-col">
-              <div className="flex-1 min-h-0 py-2">
+              <div className="flex-1 min-h-0 overflow-y-auto py-2">
                 {formStep === 1 && (
                   <section className="space-y-4" aria-labelledby="client-form-step-1">
                     <div>
@@ -860,52 +928,73 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
                 )}
 
                 {formStep === 2 && (
-                  <section className="space-y-4" aria-labelledby="client-form-step-2">
+                  <section className="space-y-2" aria-labelledby="client-form-step-2">
                     <div>
                       <h4 id="client-form-step-2" className="text-sm font-bold text-slate-800">شناسه‌ها و راه‌های ارتباطی</h4>
-                      <p className="text-[11px] text-slate-500 mt-1">این اطلاعات اختیاری‌اند و بعداً هم قابل ویرایش هستند.</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">این اطلاعات اختیاری‌اند و بعداً هم قابل ویرایش هستند.</p>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-2">
                       <div>
-                        <label className="font-semibold text-slate-700 block mb-1">کد ملی / شناسه ملی</label>
+                        <label className="text-xs font-semibold text-slate-700 block mb-1">کد ملی / شناسه ملی</label>
                         <input
                           type="text"
                           value={nationalCode}
                           onChange={e => setNationalCode(e.target.value)}
                           placeholder="۱۰ یا ۱۱ رقم"
-                          className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white font-mono"
+                          className="w-full min-w-0 p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white font-mono text-xs"
                         />
                       </div>
                       <div>
-                        <label className="font-semibold text-slate-700 block mb-1">کد اقتصادی</label>
+                        <label className="text-xs font-semibold text-slate-700 block mb-1">کد اقتصادی</label>
                         <input
                           type="text"
                           value={economicCode}
                           onChange={e => setEconomicCode(e.target.value)}
                           placeholder="کد اقتصادی"
-                          className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white font-mono"
+                          className="w-full min-w-0 p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white font-mono text-xs"
                         />
                       </div>
-                      <div className="sm:col-span-2">
-                        <label className="font-semibold text-slate-700 block mb-1">پست الکترونیکی</label>
+                      <div className="col-span-2">
+                        <label className="text-xs font-semibold text-slate-700 block mb-1">پست الکترونیکی</label>
                         <input
                           type="email"
                           dir="ltr"
                           value={email}
                           onChange={e => setEmail(e.target.value)}
                           placeholder="info@example.com"
-                          className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white font-mono text-left"
+                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white font-mono text-xs text-left"
                         />
                       </div>
-                      <div className="sm:col-span-2">
-                        <label className="font-semibold text-slate-700 block mb-1">نشانی</label>
+                      <div className="col-span-2">
+                        <label className="text-xs font-semibold text-slate-700 block mb-1">نشانی</label>
                         <textarea
-                          rows={3}
+                          rows={2}
                           value={address}
                           onChange={e => setAddress(e.target.value)}
                           placeholder="استان، شهر، خیابان، پلاک و کد پستی"
-                          className="w-full resize-none p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white"
+                          className="w-full resize-none p-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white text-xs"
                         />
+                        <div className="grid grid-cols-2 gap-2">
+                          <OnlineAddressMapPicker
+                            value={address}
+                            postalCode={postalCode}
+                            lat={latitude}
+                            lng={longitude}
+                            onSelectAddress={payload => {
+                              setAddress(payload.address);
+                              setPostalCode(payload.postalCode || '');
+                              setLatitude(payload.lat);
+                              setLongitude(payload.lng);
+                            }}
+                          />
+                          <input
+                            type="text"
+                            value={postalCode}
+                            onChange={e => setPostalCode(e.target.value)}
+                            placeholder="کد پستی (اختیاری)"
+                            className="mt-2 w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-2 text-xs focus:bg-white"
+                          />
+                        </div>
                       </div>
                     </div>
                   </section>
@@ -1119,6 +1208,33 @@ export const Clients: React.FC<{ onNavigateToPayroll?: () => void }> = ({ onNavi
           accountingEntries={accountingEntries}
           checks={checks}
           settings={settings}
+        />
+      )}
+
+      {profileClient && (
+        <ClientProfilePrintModal
+          mode="profile"
+          clients={[profileClient]}
+          selectedClient={profileClient}
+          balances={canViewFinancials ? clientBalances : new Map()}
+          canViewFinancials={canViewFinancials}
+          settings={settings}
+          invoices={invoices}
+          checks={checks}
+          onClose={() => setProfileClient(null)}
+        />
+      )}
+
+      {showDirectoryPrint && (
+        <ClientProfilePrintModal
+          mode="directory"
+          clients={filteredClients}
+          balances={canViewFinancials ? clientBalances : new Map()}
+          canViewFinancials={canViewFinancials}
+          settings={settings}
+          invoices={invoices}
+          checks={checks}
+          onClose={() => setShowDirectoryPrint(false)}
         />
       )}
 

@@ -237,7 +237,12 @@ export function calculateEmployeePayrollSlip(
   // ----------------------------------------------------
   // Deductions & Net Payout (کسورات و خالص پرداختی)
   // ----------------------------------------------------
-  const totalDeductions = employeeInsurance7Percent + incomeTax + advancePaymentDeduction + otherDeductions;
+  const statutoryDeductions = employeeInsurance7Percent + incomeTax;
+  const maxVoluntaryDeductions = Math.max(0, grossSalary - statutoryDeductions);
+  const appliedAdvanceDeduction = Math.min(advancePaymentDeduction, maxVoluntaryDeductions);
+  const remainingVoluntaryCapacity = Math.max(0, maxVoluntaryDeductions - appliedAdvanceDeduction);
+  const appliedOtherDeductions = Math.min(otherDeductions, remainingVoluntaryCapacity);
+  const totalDeductions = statutoryDeductions + appliedAdvanceDeduction + appliedOtherDeductions;
   const netPayable = Math.max(0, grossSalary - totalDeductions);
 
   return {
@@ -274,8 +279,8 @@ export function calculateEmployeePayrollSlip(
     taxableSalary,
     taxExemptionAmount: IRAN_LABOR_LAW_RATES.MONTHLY_TAX_EXEMPTION_CEILING,
     incomeTax,
-    advancePaymentDeduction,
-    otherDeductions,
+    advancePaymentDeduction: appliedAdvanceDeduction,
+    otherDeductions: appliedOtherDeductions,
     totalDeductions,
     netPayable,
     status: 'draft',

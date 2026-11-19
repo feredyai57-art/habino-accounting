@@ -2,6 +2,7 @@ import React from 'react';
 import { FormCompositeGroup, FormFieldLeaf, FormNode } from '../lib/formBuilderComposite';
 import { IGuildFormStrategy } from '../lib/guildFormStrategy';
 import { Layers, Info, Check } from 'lucide-react';
+import { OnlineAddressMapPicker } from './common/OnlineAddressMapPicker';
 
 interface DynamicGuildFormSectionProps {
   strategy: IGuildFormStrategy;
@@ -20,6 +21,22 @@ export const DynamicGuildFormSection: React.FC<DynamicGuildFormSectionProps> = (
 }) => {
   const handleLeafChange = (fieldName: string, value: any) => {
     const updated = { ...values, [fieldName]: value };
+    onChange(updated);
+  };
+
+  const handleAddressChange = (fieldName: string, address: string) => {
+    const updated = { ...values, [fieldName]: address };
+    delete updated[`${fieldName}Coordinates`];
+    onChange(updated);
+  };
+
+  const handleAddressSelection = (fieldName: string, payload: { address: string; lat?: number; lng?: number }) => {
+    const updated = { ...values, [fieldName]: payload.address };
+    if (Number.isFinite(payload.lat) && Number.isFinite(payload.lng)) {
+      updated[`${fieldName}Coordinates`] = { lat: payload.lat, lng: payload.lng };
+    } else {
+      delete updated[`${fieldName}Coordinates`];
+    }
     onChange(updated);
   };
 
@@ -59,6 +76,21 @@ export const DynamicGuildFormSection: React.FC<DynamicGuildFormSectionProps> = (
               placeholder={leaf.placeholder || '۰'}
               className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 font-mono focus:outline-hidden focus:ring-1 focus:ring-blue-500"
             />
+          ) : leaf.fieldType === 'location' || leaf.fieldType === 'address' ? (
+            <div className="space-y-1">
+              <textarea
+                value={String(currentValue ?? '')}
+                onChange={e => handleAddressChange(leaf.name, e.target.value)}
+                placeholder={leaf.placeholder}
+                rows={2}
+                className="w-full resize-none p-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+              />
+              <OnlineAddressMapPicker
+                value={String(currentValue ?? '')}
+                label={leaf.label}
+                onSelectAddress={payload => handleAddressSelection(leaf.name, payload)}
+              />
+            </div>
           ) : leaf.fieldType === 'textarea' ? (
             <textarea
               value={currentValue}

@@ -315,7 +315,7 @@ export function generateSSOKarDbf(
     DSK_ID: config.workshopCode.padEnd(10, ' ').slice(0, 10),
     DSK_NAME: config.workshopName.slice(0, 100),
     DSK_FARM: config.employerName.slice(0, 100),
-    DSK_ADR: 'تهران، بلوار اصلی پلتفرم هابینو'.slice(0, 100),
+    DSK_ADR: `${config.workshopAddress}${config.postalCode ? ` - کد پستی ${config.postalCode}` : ''}`.slice(0, 100),
     DSK_KIND: 0,
     DSK_YY: formattedYear2Digits,
     DSK_MM: period.month,

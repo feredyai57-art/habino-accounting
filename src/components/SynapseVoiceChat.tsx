@@ -6,6 +6,8 @@ import { SiraFlowAudio } from '../lib/soundFx';
 import { getStoredOcrDocuments, updateOcrDocumentStatus, ParsedFinancialDocument } from '../lib/ocrDocumentParser';
 import { HabinoOfflineQueue, OfflineQueueItem } from '../lib/offlineQueueEngine';
 import { HabinoAssistantTrainingEngine } from '../lib/assistantTrainingDoc';
+import { getClientAccountBalance } from '../lib/clientLedger';
+import { HabinoSynapseReasoningEngine } from '../lib/agents/synapseReasoningEngine';
 import { SynapseDocumentCameraScanner } from './SynapseDocumentCameraScanner';
 import { AssistantTrainingDocModal } from './AssistantTrainingDocModal';
 import {
@@ -54,6 +56,25 @@ interface VoiceMessage {
   };
 }
 
+const normalizeClientProfileText = (value: string) => value
+  .toLocaleLowerCase('fa-IR')
+  .replace(/[ي]/g, 'ی')
+  .replace(/[ك]/g, 'ک')
+  .replace(/[\u200c\u200f]/g, ' ')
+  .replace(/[۰-۹]/g, digit => String(digit.charCodeAt(0) - 1776))
+  .replace(/[٠-٩]/g, digit => String(digit.charCodeAt(0) - 1632));
+
+const isClientDirectoryRequest = (value: string) =>
+  /(?:لیست|فهرست|دفترچه|چاپ|پرینت)/.test(value) &&
+  /(?:مشتری|مخاطب|طرف.?حساب|آدرس|نشانی)/.test(value);
+
+const isClientProfileRequest = (value: string) =>
+  isClientDirectoryRequest(value) ||
+  /(?:آدرس|نشانی|پروفایل|مشخصات|مختصات|تلفن|شماره\s*(?:تماس|تلفن)|کد\s*(?:پستی|ملی)|شناسه\s*ملی)/.test(value) ||
+  /(?:نام|اطلاعات|مشخصات)\s*(?:مشتری|مخاطب|طرف.?حساب)/.test(value) ||
+  /(?:مشتری|مخاطب|طرف.?حساب)\s*(?:نام|اطلاعات|مشخصات)/.test(value) ||
+  /(?:مانده|بدهی|طلب|بدهکار|بستانکار|سقف اعتبار|اعتبار مالی).*(?:مشتری|مخاطب|طرف.?حساب)|(?:مشتری|مخاطب|طرف.?حساب).*(?:مانده|بدهی|طلب|بدهکار|بستانکار|سقف اعتبار|اعتبار مالی)/.test(value);
+
 export const SynapseVoiceChat: React.FC = () => {
   const {
     invoices,
@@ -67,7 +88,8 @@ export const SynapseVoiceChat: React.FC = () => {
     accountingEntries,
     settings,
     license,
-    currentUser
+    currentUser,
+    hasPermission
   } = useAccounting();
 
   // Assistant View Selector (مکالمه صوتی | اسکن دوربین | سند آموزش)
@@ -88,7 +110,7 @@ export const SynapseVoiceChat: React.FC = () => {
   const [voiceAuthStatus, setVoiceAuthStatus] = useState<'locked' | 'authenticated'>(() => {
     if (typeof window !== 'undefined') {
       const cached = sessionStorage.getItem('habino_voice_auth_status');
-      if (cached === 'authenticated') return 'authenticated';
+      if (cached === 'authenticated' && currentUser?.role === 'super_admin') return 'authenticated';
     }
     return 'locked';
   });
@@ -104,7 +126,8 @@ export const SynapseVoiceChat: React.FC = () => {
   const isMountedRef = useRef<boolean>(true);
   const isSpeakingRef = useRef<boolean>(false);
 
-  const isSuperAdmin = currentUser?.role === 'super_admin' || voiceAuthStatus === 'authenticated';
+  const isSuperAdmin = currentUser?.role === 'super_admin' && voiceAuthStatus === 'authenticated';
+  const canViewClientFinancials = hasPermission('accounting:view_reports');
 
   // واکشی اقلام صف آفلاین نیازمند تاییدیه صوتی سیناپس
   const refreshPendingVoiceQueue = useCallback(async () => {
@@ -148,7 +171,7 @@ export const SynapseVoiceChat: React.FC = () => {
     {
       id: 'm1',
       sender: 'siraflow',
-      text: voiceAuthStatus === 'authenticated'
+      text: isSuperAdmin
         ? 'درود مهندس فرید تهرانی عزیز! هوش صوتی سیناپس (SiraFlow) با شنود پیوسته و پروتکل یادگیری عمیق فعال است. آخرین اسناد، پیش‌فاکتورها، دفاتر دوبل و اسکن دوربین آماده بررسی هستند. چه دستوری دارید؟'
         : 'درود! هوش صوتی سیناپس (SiraFlow) آماده خدمت‌رسانی است. برای دسترسی به اسناد و دفاتر مالی، لطفاً ابتدا احراز هویت فرمایید («سیناپس، مدیریت وارد شد»). شنود پیوسته فعال است.',
       time: 'هم‌اکنون'
@@ -335,7 +358,7 @@ export const SynapseVoiceChat: React.FC = () => {
 
       // احراز هویت صوتی سریع
       const isWakePhrase = /سیناپس[،\s]*مدیریت وارد شد|مدیریت وارد شد|من فرید تهرانی هستم|احراز هویت/i.test(lowerText);
-      if (isWakePhrase) {
+      if (isWakePhrase && currentUser?.role === 'super_admin') {
         setVoiceAuthStatus('authenticated');
         if (typeof window !== 'undefined') {
           sessionStorage.setItem('habino_voice_auth_status', 'authenticated');
@@ -503,6 +526,53 @@ export const SynapseVoiceChat: React.FC = () => {
       const storedOcrDocs = getStoredOcrDocuments();
       const pendingOcrDocs = storedOcrDocs.filter(d => d.status !== 'confirmed');
 
+      const normalizedClientQuery = normalizeClientProfileText(text);
+      const shouldIncludeClientProfiles = isClientProfileRequest(normalizedClientQuery);
+      const directoryRequest = isClientDirectoryRequest(normalizedClientQuery);
+      const clientQueryStopWords = new Set([
+        'مشتری', 'مشتریان', 'مخاطب', 'مخاطبان', 'طرف', 'حساب', 'طرفحساب',
+        'آدرس', 'نشانی', 'پروفایل', 'مشخصات', 'اطلاعات', 'تلفن', 'شماره',
+        'تماس', 'کد', 'پستی', 'مختصات', 'لیست', 'فهرست', 'دفترچه', 'چاپ',
+        'پرینت', 'را', 'بده', 'بگو', 'برای', 'میخواهم', 'میخوام'
+      ]);
+      const clientQueryTerms = normalizedClientQuery
+        .replace(/[،,.؟?!]/g, ' ')
+        .split(/\s+/)
+        .filter(term => term.length > 1 && !clientQueryStopWords.has(term));
+      const clientProfiles = shouldIncludeClientProfiles
+        ? clients.map((client, index) => {
+          const searchable = normalizeClientProfileText([
+            client.name,
+            client.companyName,
+            client.phone,
+            client.nationalCode,
+            client.postalCode,
+            client.address
+          ].filter(Boolean).join(' '));
+          const score = clientQueryTerms.reduce(
+            (total, term) => total + (searchable.includes(term) ? 1 : 0),
+            0
+          );
+          return { client, index, score };
+        })
+          .filter(item => clientQueryTerms.length === 0 ? directoryRequest : item.score > 0)
+          .sort((a, b) => b.score - a.score || a.index - b.index)
+          .slice(0, 10)
+          .map(({ client }) => ({
+            name: client.name,
+            companyName: client.companyName,
+            phone: client.phone,
+            nationalCode: client.nationalCode,
+            postalCode: client.postalCode,
+            address: client.address,
+            lat: client.lat ?? client.latitude,
+            lng: client.lng ?? client.longitude,
+            balance: canViewClientFinancials
+              ? getClientAccountBalance(accountingEntries, client.id, client.balance || 0, client.name)
+              : 0
+          }))
+        : undefined;
+
       const liveContext = {
         totalInvoices: invoices.length,
         invoicesCount: invoices.length,
@@ -560,15 +630,22 @@ export const SynapseVoiceChat: React.FC = () => {
           financials: d.financials,
           date: d.date,
           status: d.status
-        }))
+        })),
+        ...(shouldIncludeClientProfiles ? {
+          clientProfiles,
+          canViewClientFinancials
+        } : {})
       };
 
-      const response: SiraFlowVoiceResponse = await chatWithSiraFlow(text, {
-        context: liveContext,
-        voiceAuthStatus,
-        lastDiscussedEntity,
-        pendingAction
-      });
+      const clientProfileReply = HabinoSynapseReasoningEngine.generateClientProfileResponse(text, liveContext);
+      const response: SiraFlowVoiceResponse = clientProfileReply
+        ? { reply: clientProfileReply, modelUsed: 'synapse_client_profile_readonly' }
+        : await chatWithSiraFlow(text, {
+          context: liveContext,
+          voiceAuthStatus,
+          lastDiscussedEntity,
+          pendingAction
+        });
 
       if (response.modelUsed) {
         setAiModelUsed(response.modelUsed);

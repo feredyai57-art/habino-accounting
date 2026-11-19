@@ -43,6 +43,23 @@ const enterpriseTenant: Tenant = {
   metadata: {}
 };
 
+const platformAdmin = { ...tenantOwner, id: 'license-test-platform-admin', role: 'super_admin' as const };
+assert.equal(
+  HabinoAuthEngine.canMutateData(platformAdmin, 'create', { isImpersonatingReadOnly: true }).allowed,
+  false,
+  'platform administrators must not mutate tenant data during read-only impersonation'
+);
+assert.equal(
+  HabinoAuthEngine.canMutateData(platformAdmin, 'create').allowed,
+  true,
+  'platform administrators retain their normal mutation permission outside impersonation'
+);
+assert.equal(
+  HabinoAuthEngine.canMutateData({ ...tenantOwner, role: 'hubino_support' }, 'update').allowed,
+  false,
+  'platform support must not mutate tenant data'
+);
+
 for (const moduleId of ['accounting_verification', 'diagnostics', 'pre_launch_qa', 'stress_test', 'tenant_isolation']) {
   assert.equal(
     PLATFORM_ONLY_MODULES.has(moduleId),

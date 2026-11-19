@@ -114,6 +114,14 @@ export class InstallationConstructionStrategy implements IGuildFormStrategy {
     );
 
     headerGroup.add(new FormFieldLeaf({
+      id: 'site-address',
+      name: 'site_address',
+      label: 'نشانی محل اجرای کارگاه',
+      fieldType: 'location',
+      placeholder: 'شهر، منطقه، خیابان و پلاک'
+    }));
+
+    headerGroup.add(new FormFieldLeaf({
       id: 'site-supervisor-name',
       name: 'site_supervisor',
       label: 'مهندس ناظر / سرپرست کارگاه',

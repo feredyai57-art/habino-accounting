@@ -32,9 +32,15 @@ export const SecurityGate: React.FC<SecurityGateProps> = ({
   onOpenLicenseModal,
   onOpenLoginModal
 }) => {
-  const { currentUser, activeTenant, canAccessModule } = useAccounting();
+  const { currentUser, activeTenant, impersonationSession, canAccessModule } = useAccounting();
+  const isReadOnlyImpersonation = impersonationSession?.isActive === true && impersonationSession.readOnly;
 
-  if (currentUser?.role === 'hubino_support' && moduleId !== 'admin_panel') {
+  if (
+    currentUser?.role === 'hubino_support' &&
+    moduleId !== 'admin_panel' &&
+    !isReadOnlyImpersonation &&
+    !(currentUser.adminTier === 'billing' && moduleId === 'license')
+  ) {
     return (
       <div className="max-w-3xl mx-auto p-8 bg-rose-50 border border-rose-200 rounded-3xl text-rose-900" dir="rtl">
         <h2 className="font-black text-lg">این ماژول در نقش پشتیبانی در دسترس نیست</h2>

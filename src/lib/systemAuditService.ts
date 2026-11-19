@@ -27,6 +27,65 @@ export interface SystemAuditEvent {
   createdAt: string;
 }
 
+export interface InfraFailureSummary {
+  action: string;
+  reasonCode: string | null;
+  eventCount: number;
+  affectedTenantCount: number;
+  lastOccurredAt: string;
+}
+
+export async function listInfraFailureSummary(): Promise<InfraFailureSummary[]> {
+  const config = getSupabaseConfig();
+  if (!config.isConfigured) throw new Error('اتصال ابری برای رصد خطاهای زیرساختی پیکربندی نشده است.');
+
+  const client = getSupabaseClient();
+  const { data: userData, error: userError } = await client.auth.getUser();
+  if (userError) throw new Error(`اعتبارسنجی نشست رصد زیرساخت ناموفق بود: ${userError.message}`);
+  const role = userData.user?.app_metadata?.role;
+  if (!userData.user || (role !== 'super_admin' && role !== 'hubino_support')) {
+    throw new Error('برای مشاهدهٔ خطاهای زیرساخت، نشست معتبر پلتفرمی لازم است.');
+  }
+
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await client
+    .from('system_audit_events')
+    .select('action, reason_code, tenant_id, created_at, outcome')
+    .gte('created_at', cutoff)
+    .or('outcome.eq.failed,action.in.(CLIENT_RUNTIME_ERROR,INVOICE_SYNC_FAILED,SUPABASE_PULL_FAILED,SUPABASE_PUSH_FAILED)')
+    .order('created_at', { ascending: false })
+    .limit(5000);
+  if (error) throw new Error(`بارگذاری رصد خطاهای زیرساخت ناموفق بود: ${error.message}`);
+
+  type AggregatedInfraFailure = InfraFailureSummary & { affectedTenants: Set<string> };
+  const groups = new Map<string, AggregatedInfraFailure>();
+  (data || []).forEach(row => {
+    const key = `${row.action}:${row.reason_code || ''}`;
+    const group = groups.get(key);
+    if (group) {
+      group.eventCount += 1;
+      if (row.tenant_id) group.affectedTenants.add(row.tenant_id);
+      if (row.created_at > group.lastOccurredAt) group.lastOccurredAt = row.created_at;
+    } else {
+      groups.set(key, {
+        action: row.action,
+        reasonCode: row.reason_code,
+        eventCount: 1,
+        affectedTenantCount: 0,
+        lastOccurredAt: row.created_at,
+        affectedTenants: new Set(row.tenant_id ? [row.tenant_id] : [])
+      });
+    }
+  });
+
+  return [...groups.values()]
+    .map(group => {
+      const { affectedTenants, ...summary } = group;
+      return { ...summary, affectedTenantCount: affectedTenants.size };
+    })
+    .sort((left, right) => right.eventCount - left.eventCount);
+}
+
 export async function recordSystemAuditEvent(event: SystemAuditEventInput): Promise<void> {
   const config = getSupabaseConfig();
   if (!config.isConfigured) return;

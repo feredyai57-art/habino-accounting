@@ -264,7 +264,7 @@ export class HabinoAtomicTransactionWrapper {
     input: CreateInstallmentPlanInput,
     tenantId: string
   ): CreateInstallmentPlanResult {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
     const invoice = snapshot.invoices.find(item => item.id === input.invoiceId);
     if (!invoice) throw new Error('فاکتور انتخاب‌شده یافت نشد.');
     if (invoice.tenantId && invoice.tenantId !== tenantId) throw new Error('این فاکتور متعلق به مستأجر جاری نیست.');
@@ -412,7 +412,7 @@ export class HabinoAtomicTransactionWrapper {
     input: RecordInstallmentPaymentInput,
     tenantId: string
   ): RecordInstallmentPaymentResult {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
     const duplicate = snapshot.transactions.find(tx => tx.metadata?.installmentPaymentId === input.idempotencyKey);
     if (duplicate) {
       const installment = snapshot.installments.find(item => item.id === input.installmentId);
@@ -619,6 +619,20 @@ export class HabinoAtomicTransactionWrapper {
     };
   }
 
+  private static createWorkingSnapshot(state: FinancialStateSnapshot): FinancialStateSnapshot {
+    return {
+      invoices: [...state.invoices],
+      accountingEntries: [...state.accountingEntries],
+      clients: [...state.clients],
+      transactions: [...state.transactions],
+      installments: [...state.installments],
+      checks: [...state.checks],
+      projects: [...state.projects],
+      inventory: state.inventory ? [...state.inventory] : undefined,
+      bankAccounts: state.bankAccounts ? [...state.bankAccounts] : undefined
+    };
+  }
+
   /**
    * 🧩 ۱ و ۲) اجرای اتمیک ثبت سند و ذخیره‌سازی در دفتر کل و حساب اشخاص
    * در صورت بروز هرگونه خطا، کل عملیات بلافاصله Rollback می‌شود.
@@ -630,7 +644,7 @@ export class HabinoAtomicTransactionWrapper {
     explicitInvoiceId?: string
   ): { nextState: FinancialStateSnapshot; invoice: Invoice } {
     // تهیه نسخه پشتیبان برای رول‌بک
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
     let releaseReturnLock: (() => void) | null = null;
 
     try {
@@ -998,7 +1012,7 @@ export class HabinoAtomicTransactionWrapper {
     invoiceId: string,
     softDelete: boolean = false
   ): FinancialStateSnapshot {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const target = snapshot.invoices.find(inv => inv.id === invoiceId);
@@ -1387,7 +1401,7 @@ export class HabinoAtomicTransactionWrapper {
       tenantId: string;
     }
   ): FinancialStateSnapshot {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const project = snapshot.projects.find(p => p.id === params.projectId);
@@ -1455,7 +1469,7 @@ export class HabinoAtomicTransactionWrapper {
       tenantId: string;
     }
   ): FinancialStateSnapshot {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const projectIndex = snapshot.projects.findIndex(p => p.id === params.projectId);
@@ -1501,7 +1515,7 @@ export class HabinoAtomicTransactionWrapper {
     txData: Omit<Transaction, 'id'>,
     tenantId: string
   ): { nextState: FinancialStateSnapshot; transaction: Transaction } {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const purpose = getTransactionPurpose(txData as Transaction);
@@ -1671,7 +1685,7 @@ export class HabinoAtomicTransactionWrapper {
     currentState: FinancialStateSnapshot,
     transactionId: string
   ): FinancialStateSnapshot {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const target = snapshot.transactions.find(tx => tx.id === transactionId);
@@ -1750,7 +1764,7 @@ export class HabinoAtomicTransactionWrapper {
     checkData: Omit<Check, 'id'>,
     tenantId: string
   ): { nextState: FinancialStateSnapshot; check: Check } {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const rawCId = checkData.clientId;
@@ -1913,7 +1927,7 @@ export class HabinoAtomicTransactionWrapper {
     currentState: FinancialStateSnapshot,
     checkId: string
   ): FinancialStateSnapshot {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const target = snapshot.checks.find(c => c.id === checkId);
@@ -1972,7 +1986,7 @@ export class HabinoAtomicTransactionWrapper {
     updates: Partial<Check>,
     tenantId: string
   ): { nextState: FinancialStateSnapshot; check: Check } {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const checkIndex = snapshot.checks.findIndex(c => c.id === checkId);
@@ -2414,7 +2428,7 @@ export class HabinoAtomicTransactionWrapper {
     entries: Omit<AccountingEntry, 'id'>[],
     tenantId: string
   ): { nextState: FinancialStateSnapshot; createdEntries: AccountingEntry[] } {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       if (!entries || entries.length === 0) {
@@ -2483,7 +2497,7 @@ export class HabinoAtomicTransactionWrapper {
     currentState: FinancialStateSnapshot,
     documentNumber: string
   ): FinancialStateSnapshot {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const targetEntries = snapshot.accountingEntries.filter(
@@ -2530,7 +2544,7 @@ export class HabinoAtomicTransactionWrapper {
     clientData: Omit<Client, 'id'>,
     tenantId: string
   ): { nextState: FinancialStateSnapshot; client: Client } {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       if (!clientData.name || clientData.name.trim() === '') {
@@ -2577,7 +2591,7 @@ export class HabinoAtomicTransactionWrapper {
     tenantId: string,
     openingBalanceUpdate = true
   ): { nextState: FinancialStateSnapshot; client: Client } {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const clientIndex = snapshot.clients.findIndex(c => c.id === clientId);
@@ -2645,7 +2659,7 @@ export class HabinoAtomicTransactionWrapper {
     currentState: FinancialStateSnapshot,
     clientId: string
   ): FinancialStateSnapshot {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const targetClient = snapshot.clients.find(c => c.id === clientId);
@@ -2690,7 +2704,7 @@ export class HabinoAtomicTransactionWrapper {
     currentState: FinancialStateSnapshot,
     projectId: string
   ): FinancialStateSnapshot {
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
 
     try {
       const projectIndex = snapshot.projects.findIndex(p => p.id === projectId);
@@ -2752,7 +2766,7 @@ export class HabinoAtomicTransactionWrapper {
       throw new Error('اطلاعات واردشده ناقص است.');
     }
 
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
     const dateStr = operationDate || new Date().toISOString().split('T')[0];
 
     // قفل‌گذاری روی کلیه فاکتورها و طرف‌حساب‌های درگیر
@@ -2965,7 +2979,7 @@ export class HabinoAtomicTransactionWrapper {
       throw new Error('ثبت سند بدون انتخاب مخاطب مجاز نیست.');
     }
 
-    const snapshot = this.createSnapshot(currentState);
+    const snapshot = this.createWorkingSnapshot(currentState);
     const client = snapshot.clients.find(c => c.id === params.counterpartyClientId);
     if (!client) {
       throw new Error('ثبت سند بدون انتخاب مخاطب مجاز نیست.');

@@ -11,7 +11,9 @@ export type FormFieldType =
   | 'date' 
   | 'select' 
   | 'boolean' 
-  | 'textarea';
+  | 'textarea'
+  | 'location'
+  | 'address';
 
 export interface FormValidationRule {
   required?: boolean;
@@ -121,6 +123,16 @@ export class FormFieldLeaf extends FormNode {
       target[this.name] = values[this.name];
     } else if (this.defaultValue !== undefined) {
       target[this.name] = this.defaultValue;
+    }
+
+    if (this.fieldType === 'address' || this.fieldType === 'location') {
+      const coordinates = values[`${this.name}Coordinates`];
+      if (
+        Number.isFinite(coordinates?.lat) &&
+        Number.isFinite(coordinates?.lng)
+      ) {
+        target[`${this.name}Coordinates`] = { lat: coordinates.lat, lng: coordinates.lng };
+      }
     }
   }
 }

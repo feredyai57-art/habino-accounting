@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAccounting } from '../lib/store';
 import { ROLE_DETAILS_FA } from '../lib/authEngine';
+import { ENABLE_OS_DESKTOP } from '../lib/moduleVisibility';
 import {
   Sparkles,
   ShoppingBag,
@@ -328,15 +329,17 @@ export const HabinoLandingPage: React.FC<HabinoLandingPageProps> = ({
             >
               🔐 ورود / ثبت‌نام در سامانه
             </button>
-            <button
-              onClick={() => {
-                onEnterAccounting(undefined, 'desktop');
-                setMobileMenuOpen(false);
-              }}
-              className="w-full py-3 text-center font-semibold bg-slate-900 border border-slate-700 rounded-xl text-cyan-300"
-            >
-              🖥️ ورود به میزکار دسکتاپ (OS)
-            </button>
+            {ENABLE_OS_DESKTOP && (
+              <button
+                onClick={() => {
+                  onEnterAccounting(undefined, 'desktop');
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full py-3 text-center font-semibold bg-slate-900 border border-slate-700 rounded-xl text-cyan-300"
+              >
+                🖥️ ورود به میزکار دسکتاپ (OS)
+              </button>
+            )}
             <div className="pt-4 border-t border-slate-800 flex flex-col gap-3 text-sm text-slate-200">
               <button onClick={() => scrollToSection('accounting-highlight')} className="text-right py-1 hover:text-white">
                 📊 معرفی ماژول حسابداری بازار
@@ -486,14 +489,16 @@ export const HabinoLandingPage: React.FC<HabinoLandingPageProps> = ({
 
             {/* CTA Gateways */}
             <div className="flex flex-col sm:flex-row gap-3.5 justify-center mb-12">
-              <button
-                onClick={() => onEnterAccounting(undefined, 'desktop')}
-                className="bg-slate-900 hover:bg-slate-800 text-white px-7 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg text-sm transition"
-              >
-                <Monitor className="w-4 h-4 text-blue-400" />
-                <span>ورود به میزکار دسکتاپ هابینو</span>
-                <ArrowRight className="w-4 h-4 rotate-180" />
-              </button>
+              {ENABLE_OS_DESKTOP && (
+                <button
+                  onClick={() => onEnterAccounting(undefined, 'desktop')}
+                  className="bg-slate-900 hover:bg-slate-800 text-white px-7 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg text-sm transition"
+                >
+                  <Monitor className="w-4 h-4 text-blue-400" />
+                  <span>ورود به میزکار دسکتاپ هابینو</span>
+                  <ArrowRight className="w-4 h-4 rotate-180" />
+                </button>
+              )}
 
               <button
                 onClick={() => onEnterAccounting(undefined, 'classic')}
@@ -1752,10 +1757,10 @@ export const HabinoLandingPage: React.FC<HabinoLandingPageProps> = ({
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <button
-                onClick={() => onEnterAccounting(undefined, 'desktop')}
+                onClick={() => onEnterAccounting(undefined, ENABLE_OS_DESKTOP ? 'desktop' : 'classic')}
                 className="bg-white hover:bg-slate-100 text-slate-900 px-8 py-3.5 rounded-xl font-black text-sm shadow-lg transition"
               >
-                ورود به میزکار دسکتاپ هابینو
+                {ENABLE_OS_DESKTOP ? 'ورود به میزکار دسکتاپ هابینو' : 'ورود به پنل حسابداری هابینو'}
               </button>
               <button
                 onClick={onOpenLogin}

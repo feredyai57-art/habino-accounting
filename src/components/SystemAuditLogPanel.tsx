@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAccounting } from '../lib/store';
 import { Download, RefreshCw, Search } from 'lucide-react';
-import { SystemAuditEvent, listSystemAuditEvents } from '../lib/systemAuditService';
+import { InfraFailureSummary, SystemAuditEvent, listInfraFailureSummary, listSystemAuditEvents } from '../lib/systemAuditService';
 
 interface SystemAuditLogPanelProps {
   tenantId: string;
@@ -14,6 +14,8 @@ export const SystemAuditLogPanel: React.FC<SystemAuditLogPanelProps> = ({ tenant
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [infraSummary, setInfraSummary] = useState<InfraFailureSummary[]>([]);
+  const [infraSummaryError, setInfraSummaryError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleFactoryReset = (event: Event) => {
@@ -68,6 +70,22 @@ export const SystemAuditLogPanel: React.FC<SystemAuditLogPanelProps> = ({ tenant
     };
   }, [tenantId, refreshKey, systemAuditLogs]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setInfraSummaryError(null);
+    listInfraFailureSummary()
+      .then(rows => {
+        if (!cancelled) setInfraSummary(rows);
+      })
+      .catch(cause => {
+        if (!cancelled) {
+          setInfraSummary([]);
+          setInfraSummaryError(cause instanceof Error ? cause.message : 'بارگذاری رصد زیرساخت ناموفق بود.');
+        }
+      });
+    return () => { cancelled = true; };
+  }, [refreshKey]);
+
   const visibleEvents = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     if (!normalizedSearch) return events;
@@ -106,6 +124,22 @@ export const SystemAuditLogPanel: React.FC<SystemAuditLogPanelProps> = ({ tenant
 
   return (
     <section className="space-y-4" dir="rtl">
+      <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+        <h3 className="text-sm font-black text-rose-950">رصد خطاهای زیرساختی پلتفرم · ۳۰ روز اخیر</h3>
+        {infraSummaryError && <p role="alert" className="mt-2 text-xs text-rose-800">{infraSummaryError}</p>}
+        {!infraSummaryError && infraSummary.length === 0 && <p className="mt-2 text-xs text-rose-800">خطای زیرساختی تجمیع‌شده‌ای برای این بازه ثبت نشده است.</p>}
+        {infraSummary.length > 0 && (
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {infraSummary.slice(0, 8).map((summary, index) => (
+              <article key={`${summary.action}-${summary.reasonCode || 'none'}-${index}`} className="rounded-xl border border-rose-100 bg-white p-3 text-xs">
+                <p className="font-bold text-slate-900">{summary.action}</p>
+                <p className="mt-1 text-slate-600">علت: {summary.reasonCode || 'ثبت‌نشده'} · رخداد: {summary.eventCount} · مستأجران متأثر: {summary.affectedTenantCount}</p>
+                <time className="mt-1 block text-[10px] text-slate-400">{new Date(summary.lastOccurredAt).toLocaleString('fa-IR')}</time>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-6 text-amber-950">
         گزارش شامل شناسه‌ها و کدهای رویداد است و محتوای فاکتور، مبالغ، متن خطا یا اسرار را نگه نمی‌دارد.
         رویدادهای «پایگاه داده» از تغییر واقعی ردیف‌ها ثبت شده‌اند؛ رویدادهای «برنامه» با نشست معتبر ارسال می‌شوند اما گزارش خود برنامه هستند، نه اثبات مستقل انجام عملیات.

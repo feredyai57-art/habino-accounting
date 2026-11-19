@@ -5,7 +5,7 @@ import {
   getRemainingDays,
   DEMO_VS_MARKET_COMPARISON
 } from '../lib/licenseEngine';
-import { SubscriptionPlanType } from '../types';
+import { SubscriptionPlanType, Tenant } from '../types';
 import { formatCurrency } from '../lib/currencyUtils';
 import { UpgradeModal } from './UpgradeModal';
 import { issuePlatformAddonLicense, issuePlatformLicense } from '../lib/platformSupportService';
@@ -34,7 +34,13 @@ import {
 } from 'lucide-react';
 import { HABINO_ADDONS, PLAN_LIMITS } from '../lib/authEngine';
 
-export const LicenseManager: React.FC = () => {
+interface LicenseManagerProps {
+  defaultTab?: 'comparison' | 'plans' | 'environment' | 'master';
+  tenantsOverride?: Tenant[];
+  initialTenantId?: string;
+}
+
+export const LicenseManager: React.FC<LicenseManagerProps> = ({ defaultTab, tenantsOverride, initialTenantId }) => {
   const {
     license,
     activeTenant,
@@ -48,7 +54,7 @@ export const LicenseManager: React.FC = () => {
   } = useAccounting();
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'comparison' | 'plans' | 'environment' | 'master'>('comparison');
+  const [activeTab, setActiveTab] = useState<'comparison' | 'plans' | 'environment' | 'master'>(defaultTab || 'comparison');
   const [modalInitialTab, setModalInitialTab] = useState<'plans' | 'addons'>('plans');
 
   // Activation Key Input
@@ -60,7 +66,7 @@ export const LicenseManager: React.FC = () => {
   // Master Generator State (For Farid Tehrani)
   const [genTier, setGenTier] = useState<SubscriptionPlanType>('starter');
   const [genDuration, setGenDuration] = useState<number>(365);
-  const [genTenantId, setGenTenantId] = useState<string>(activeTenant.id);
+  const [genTenantId, setGenTenantId] = useState<string>(initialTenantId || activeTenant.id);
   const [generatedKey, setGeneratedKey] = useState<{
     serialKey: string;
     expiresAt: string | null;
@@ -77,11 +83,15 @@ export const LicenseManager: React.FC = () => {
   const [envMsg, setEnvMsg] = useState<string | null>(null);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState<boolean>(false);
   const isSuperAdmin = currentUser?.role === 'super_admin';
-  const licenseTargetTenant = availableTenants.find(tenant => tenant.id === genTenantId);
+  const canIssueLicenses = currentUser?.role === 'super_admin' ||
+    currentUser?.adminTier === 'founder' ||
+    currentUser?.adminTier === 'billing';
+  const targetTenants = tenantsOverride?.length ? tenantsOverride : availableTenants;
+  const licenseTargetTenant = targetTenants.find(tenant => tenant.id === genTenantId);
 
   useEffect(() => {
-    setGenTenantId(activeTenant.id);
-  }, [activeTenant.id]);
+    setGenTenantId(initialTenantId || activeTenant.id);
+  }, [activeTenant.id, initialTenantId]);
 
   const remaining = getRemainingDays(license.expiresAt);
   const currentTierInfo = TIER_DETAILS[license.tier] || TIER_DETAILS.bazaar || TIER_DETAILS.pro;
@@ -123,7 +133,7 @@ export const LicenseManager: React.FC = () => {
 
   const handleGenerateSerial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isSuperAdmin || !licenseTargetTenant) return;
+    if (!canIssueLicenses || !licenseTargetTenant) return;
     setIsActivating(true);
     setActivationMsg(null);
     try {
@@ -142,7 +152,7 @@ export const LicenseManager: React.FC = () => {
 
   const handleGenerateAddonKey = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isSuperAdmin || !licenseTargetTenant) return;
+    if (!canIssueLicenses || !licenseTargetTenant) return;
     const addon = HABINO_ADDONS.find(item => item.id === genAddonId && item.status === 'available');
     if (!addon) {
       setActivationMsg({ type: 'error', text: 'صدور کلید فقط برای افزونه‌های منتشرشده مجاز است.' });
@@ -267,7 +277,7 @@ export const LicenseManager: React.FC = () => {
           <span>محیط داده (سوئیچ دمو / کار واقعی)</span>
         </button>
 
-        {isSuperAdmin && (
+        {canIssueLicenses && (
           <button
             onClick={() => setActiveTab('master')}
             className={`px-4 py-2.5 rounded-t-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
@@ -703,7 +713,7 @@ export const LicenseManager: React.FC = () => {
       )}
 
       {/* TAB 4: MASTER ADMIN GENERATOR */}
-      {activeTab === 'master' && isSuperAdmin && (
+      {activeTab === 'master' && canIssueLicenses && (
         <div className="rounded-3xl border border-indigo-200 bg-gradient-to-br from-indigo-50/70 via-white to-slate-50 p-6 md:p-8 shadow-sm space-y-6 animate-in fade-in">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -716,7 +726,7 @@ export const LicenseManager: React.FC = () => {
               </div>
             </div>
             <span className="text-[11px] font-bold px-3 py-1 bg-indigo-100 text-indigo-800 rounded-full border border-indigo-200">
-              Super Admin
+              صدور رسمی لایسنس هابینو
             </span>
           </div>
 
@@ -766,7 +776,7 @@ export const LicenseManager: React.FC = () => {
                 }}
                 className="w-full p-2.5 bg-white border border-slate-200 rounded-xl"
               >
-                {availableTenants.map(tenant => (
+                {targetTenants.map(tenant => (
                   <option key={tenant.id} value={tenant.id}>{tenant.name} ({tenant.id})</option>
                 ))}
               </select>
@@ -854,7 +864,7 @@ export const LicenseManager: React.FC = () => {
                   }}
                   className="w-full p-2.5 bg-white border border-slate-200 rounded-xl"
                 >
-                  {availableTenants.map(tenant => (
+                  {targetTenants.map(tenant => (
                     <option key={tenant.id} value={tenant.id}>{tenant.name} ({tenant.id})</option>
                   ))}
                 </select>

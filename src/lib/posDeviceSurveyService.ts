@@ -61,8 +61,15 @@ export async function listTenantPosDeviceSurveys(tenantId: string): Promise<PosD
 
 export async function listAllPosDeviceSurveys(): Promise<PosDeviceSurvey[]> {
   const { client, user } = await requireAuthenticatedClient();
-  if (user.app_metadata?.role !== 'super_admin') {
-    throw new Error('مشاهدهٔ پاسخ‌های همهٔ مستأجران فقط برای سوپرادمین مجاز است.');
+  const role = user.app_metadata?.role;
+  const rawTier = user.app_metadata?.admin_tier;
+  const adminTier = role === 'super_admin'
+    ? 'founder'
+    : role === 'hubino_support'
+      ? (rawTier === 'billing' || rawTier === 'sre' ? rawTier : 'support')
+      : null;
+  if (adminTier !== 'founder' && adminTier !== 'billing') {
+    throw new Error('مشاهدهٔ پاسخ‌های همهٔ مستأجران فقط برای بنیان‌گذار و کارشناس مالی مجاز است.');
   }
 
   const { data, error } = await client

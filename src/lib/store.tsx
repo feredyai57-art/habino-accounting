@@ -16,6 +16,7 @@ import {
   LicenseTier,
   BackupSnapshot,
   AppUser,
+  AdminTier,
   Tenant,
   UserRole,
   UserPermission,
@@ -70,6 +71,17 @@ import {
   recordDocumentDiagnosticEvent
 } from './documentDiagnostics';
 import { recordSystemAuditEvent } from './systemAuditService';
+import { startPlatformImpersonation } from './platformSupportService';
+
+export interface ImpersonationSession {
+  isActive: boolean;
+  targetTenantId: string | null;
+  homeTenantId: string | null;
+  startedAt: string | null;
+  expiresAt: string | null;
+  readOnly: boolean;
+  reason?: string;
+}
 import { SystemAuditLog } from '../types';
 import { getAllAccountMoeins } from './chartOfAccountsData';
 import {
@@ -122,6 +134,7 @@ interface AccountingContextType {
   settings: CompanySettings;
   license: LicenseInfo;
   activeTenantId: string;
+  impersonationSession: ImpersonationSession | null;
   isOnline: boolean;
 
   // Multi-Tenant & RBAC State
@@ -136,7 +149,8 @@ interface AccountingContextType {
   loginAsPredefined: (roleOrKey: string) => Promise<AppUser>;
   registerTenant: (input: RegisterTenantInput) => Promise<{ success: boolean; message: string; tenant?: Tenant; user?: AppUser }>;
   logout: () => Promise<void>;
-  switchTenant: (tenantId: string) => Promise<{ success: boolean; message: string }>;
+  switchTenant: (tenantId: string, reason?: string, tenantOverride?: Tenant) => Promise<{ success: boolean; message: string }>;
+  exitImpersonation: () => Promise<void>;
   updatePlatformTenantAccount: (
     tenantId: string,
     updates: Pick<Tenant, 'name' | 'ownerName' | 'ownerEmail' | 'ownerPhone' | 'guildType' | 'status'>
@@ -145,9 +159,8 @@ interface AccountingContextType {
   refreshTenantUsers: (tenantId?: string) => Promise<AppUser[]>;
   updateTenantUser: (id: string, updates: Partial<AppUser>) => Promise<void>;
   deleteTenantUser: (id: string) => Promise<void>;
-  changeUserRole: (userId: string, newRole: UserRole) => Promise<{ success: boolean; message: string }>;
   hasPermission: (permission: UserPermission) => boolean;
-  canAccessModule: (moduleId: string) => { allowed: boolean; reasonFa?: string; gateType?: 'plan' | 'role' | 'platform' | 'release'; requiredPlan?: SubscriptionPlanType };
+  canAccessModule: (moduleId: string, options?: { isImpersonatingReadOnly?: boolean }) => { allowed: boolean; reasonFa?: string; gateType?: 'plan' | 'role' | 'platform' | 'release'; requiredPlan?: SubscriptionPlanType };
   canMutateData: (action: 'create' | 'update' | 'delete') => { allowed: boolean; reasonFa?: string };
   upgradeTenantSubscription: (plan: SubscriptionPlanType, serialKey?: string) => Promise<{ success: boolean; message: string }>;
   extendTenantTrial: (tenantId: string, days: number) => Promise<{ success: boolean; message: string }>;
@@ -529,6 +542,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     const cur = HabinoAuthEngine.loadCurrentUser();
     return cur ? cur.tenantId : 'tenant-main';
   });
+  const [impersonationSession, setImpersonationSession] = useState<ImpersonationSession | null>(null);
 
   const activeTenant = availableTenants.find(t => t.id === activeTenantId) || availableTenants[0];
   const [isOnline] = useState<boolean>(getIsSupabaseConfigured());
@@ -631,6 +645,26 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
     setSettings(tenantSpecific);
   }, [activeTenantId]);
 
+  useEffect(() => {
+    if (!impersonationSession?.isActive || !impersonationSession.expiresAt) return;
+
+    const remaining = new Date(impersonationSession.expiresAt).getTime() - Date.now();
+    const timer = window.setTimeout(() => {
+      setActiveTenantId(impersonationSession.homeTenantId || currentUser?.tenantId || 'tenant-main');
+      setImpersonationSession(null);
+      void recordSystemAuditEvent({
+        action: 'PLATFORM_IMPERSONATION_ENDED',
+        tenantId: impersonationSession.targetTenantId,
+        resourceType: 'tenant',
+        resourceId: impersonationSession.targetTenantId,
+        reasonCode: 'SESSION_EXPIRED',
+        outcome: 'succeeded'
+      });
+    }, Math.max(0, remaining));
+
+    return () => window.clearTimeout(timer);
+  }, [impersonationSession, currentUser?.tenantId]);
+
   // Sync to local storage with tenant-scoped isolation
   useEffect(() => { if (isLocalHydrationComplete) localStorage.setItem('habino_invoices', JSON.stringify(invoices)); }, [invoices, isLocalHydrationComplete]);
   useEffect(() => { if (isLocalHydrationComplete) localStorage.setItem('habino_checks', JSON.stringify(checks)); }, [checks, isLocalHydrationComplete]);
@@ -660,7 +694,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
   useEffect(() => { if (isLocalHydrationComplete) localStorage.setItem('habino_system_audit_logs', JSON.stringify(systemAuditLogs)); }, [systemAuditLogs, isLocalHydrationComplete]);
 
   // رفرنس وضعیت مالی هماهنگ برای حفظ پیوستگی و حذف اثر Stale Closure در تراکنش‌های متوالی
-  const performAutoBootSyncRef = useRef<((t?: string) => Promise<void>) | null>(null);
+  const performAutoBootSyncRef = useRef<((t?: string, options?: { readOnly?: boolean }) => Promise<void>) | null>(null);
   const financialStateRef = useRef({
     invoices,
     accountingEntries,
@@ -897,6 +931,12 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
       const role = roleValue as UserRole;
 
       if (role === 'super_admin' || role === 'hubino_support') {
+        const configuredTier = (['founder', 'support', 'billing', 'sre'] as const).find(
+          tier => tier === authUser.app_metadata?.admin_tier
+        );
+        const adminTier: AdminTier = role === 'super_admin'
+          ? 'founder'
+          : (configuredTier === 'billing' || configuredTier === 'sre' ? configuredTier : 'support');
         const platformTemplate = [...tenantUsers, ...DEFAULT_USERS].find(
           user => user.email.toLowerCase() === (authUser.email || email).toLowerCase() && user.role === role
         );
@@ -908,6 +948,7 @@ export const AccountingProvider: React.FC<{ children: ReactNode }> = ({ children
           phone: platformTemplate?.phone || authUser.user_metadata?.phone || '',
           fullName: platformTemplate?.fullName || authUser.user_metadata?.full_name || authUser.email || email,
           role,
+          adminTier,
           permissions: ROLE_DEFAULT_PERMISSIONS[role],
           status: 'active',
           createdAt: platformTemplate?.createdAt || new Date().toISOString()
@@ -1152,35 +1193,107 @@ if (currentUser) {
       setAuditLogs(HabinoAuthEngine.loadAuditLogs());
     }
     setCurrentUser(null);
+    setImpersonationSession(null);
     localStorage.removeItem('habino_current_user');
   };
 
-  const switchTenant = async (targetTenantId: string): Promise<{ success: boolean; message: string }> => {
+  const exitImpersonation = async (): Promise<void> => {
+    if (!impersonationSession?.isActive) return;
+
+    const targetTenantId = impersonationSession.targetTenantId;
+    setActiveTenantId(impersonationSession.homeTenantId || currentUser?.tenantId || 'tenant-main');
+    setImpersonationSession(null);
+    await recordSystemAuditEvent({
+      action: 'PLATFORM_IMPERSONATION_ENDED',
+      tenantId: targetTenantId,
+      resourceType: 'tenant',
+      resourceId: targetTenantId,
+      outcome: 'succeeded'
+    });
+  };
+
+  const switchTenant = async (targetTenantId: string, reason?: string, tenantOverride?: Tenant): Promise<{ success: boolean; message: string }> => {
     if (!currentUser) {
       return { success: false, message: 'برای تغییر مستأجر ابتدا وارد حساب کاربری شوید.' };
     }
 
-    const targetTenant = availableTenants.find(t => t.id === targetTenantId);
+    const targetTenant = tenantOverride || availableTenants.find(t => t.id === targetTenantId);
     if (!targetTenant) {
       return { success: false, message: 'مستأجر موردنظر یافت نشد.' };
     }
+    if (targetTenant.status === 'suspended') {
+      if (impersonationSession?.isActive && targetTenantId === impersonationSession.targetTenantId) {
+        await exitImpersonation();
+      }
+      return {
+        success: false,
+        message: 'فضای کاری این مستأجر تعلیق شده است و مشاهدهٔ پنل آن مجاز نیست. ابتدا وضعیت آن را تغییر دهید.'
+      };
+    }
+    if (impersonationSession?.isActive) {
+      if (targetTenantId === impersonationSession.targetTenantId) {
+        return { success: true, message: 'مشاهدهٔ فقط‌خواندنی این مستأجر از قبل فعال است.' };
+      }
+      return {
+        success: false,
+        message: 'برای تغییر مستأجر، ابتدا از حالت مشاهده پشتیبانی خارج شوید.'
+      };
+    }
 
     // Permission check: super_admin can switch anywhere, otherwise user must belong to tenant
-    if (currentUser.role !== 'super_admin' && currentUser.tenantId !== targetTenantId) {
+    const isPlatformOperator = currentUser.role === 'super_admin' || currentUser.role === 'hubino_support';
+    const canImpersonate = currentUser.adminTier
+      ? currentUser.adminTier === 'founder' || currentUser.adminTier === 'support'
+      : isPlatformOperator;
+    if (!isPlatformOperator && currentUser.tenantId !== targetTenantId) {
       return {
         success: false,
         message: 'شما دسترسی لازم برای ورود به این مستأجر سازمانی را ندارید. این دسترسی مخصوص ادمین ارشد است.'
       };
     }
-    if (targetTenant.status === 'suspended' && currentUser.role !== 'super_admin') {
-      return {
-        success: false,
-        message: 'فضای کاری این مستأجر موقتاً تعلیق شده است؛ برای پیگیری با پشتیبانی هابینو تماس بگیرید.'
-      };
+    if (isPlatformOperator && targetTenantId !== currentUser.tenantId && !canImpersonate) {
+      return { success: false, message: 'مشاهدهٔ مستأجر برای سطح دسترسی اپراتور شما مجاز نیست.' };
+    }
+    const homeTenantId = impersonationSession?.homeTenantId || currentUser.tenantId;
+    if (canImpersonate && targetTenantId !== homeTenantId) {
+      const emergencyReason = reason?.trim()
+        .replace(/[^\p{L}\p{N}_ .،,:;()-]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .slice(0, 180);
+      const startedAt = new Date();
+      try {
+        await startPlatformImpersonation(targetTenantId, emergencyReason);
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error
+            ? `ثبت ممیزی دسترسی پشتیبانی ناموفق بود؛ ورود لغو شد: ${error.message}`
+            : 'ثبت ممیزی دسترسی پشتیبانی ناموفق بود؛ ورود لغو شد.'
+        };
+      }
+      setImpersonationSession({
+        isActive: true,
+        targetTenantId,
+        homeTenantId,
+        startedAt: startedAt.toISOString(),
+        expiresAt: new Date(startedAt.getTime() + 30 * 60 * 1000).toISOString(),
+        readOnly: true,
+        reason: emergencyReason || undefined
+      });
+    } else if (targetTenantId === homeTenantId) {
+      setImpersonationSession(null);
     }
 
+    const nextTenants = availableTenants.some(tenant => tenant.id === targetTenantId)
+      ? availableTenants
+      : [...availableTenants, targetTenant];
+    if (nextTenants !== availableTenants) {
+      const mergedTenants = nextTenants;
+      setAvailableTenants(mergedTenants);
+      HabinoAuthEngine.saveTenants(mergedTenants);
+    }
     setActiveTenantId(targetTenantId);
-    const tenantSpecific = loadTenantSettings(targetTenantId, availableTenants);
+    const tenantSpecific = loadTenantSettings(targetTenantId, nextTenants);
     setSettings(tenantSpecific);
     void recordSystemAuditEvent({
       action: 'TENANT_SWITCHED',
@@ -1191,7 +1304,9 @@ if (currentUser) {
     });
 
     // 🔄 پایش فوری وضعیت ریست فکتوری و همگام‌سازی ابری پس از تغییر مستأجر
-    performAutoBootSyncRef.current?.(targetTenantId).catch(() => {});
+    performAutoBootSyncRef.current?.(targetTenantId, {
+      readOnly: isPlatformOperator && targetTenantId !== homeTenantId
+    }).catch(() => {});
 
     if (currentUser) {
       HabinoAuthEngine.addAuditLog({
@@ -1215,15 +1330,15 @@ if (currentUser) {
     tenantId: string,
     updates: Pick<Tenant, 'name' | 'ownerName' | 'ownerEmail' | 'ownerPhone' | 'guildType' | 'status'>
   ): Promise<{ success: boolean; message: string }> => {
-    if (currentUser?.role !== 'super_admin') {
+    if (currentUser?.role !== 'super_admin' || (currentUser.adminTier && currentUser.adminTier !== 'founder')) {
       return { success: false, message: 'ویرایش فضای کاری فقط برای سوپرادمین مجاز است.' };
+    }
+    const mutationPermission = canMutateData('update');
+    if (!mutationPermission.allowed) {
+      return { success: false, message: mutationPermission.reasonFa || 'ویرایش در حالت مشاهده فقط‌خواندنی مجاز نیست.' };
     }
 
     const existingTenant = availableTenants.find(tenant => tenant.id === tenantId);
-    if (!existingTenant) {
-      return { success: false, message: 'مستأجر مقصد در فهرست فضای کاری یافت نشد.' };
-    }
-
     const { data, error } = await supabase.rpc('rpc_update_platform_tenant_account', {
       p_tenant_id: tenantId,
       p_name: updates.name,
@@ -1241,21 +1356,25 @@ if (currentUser) {
     }
 
     const metadata = data.metadata && typeof data.metadata === 'object'
-      ? { ...existingTenant.metadata, ...data.metadata }
-      : existingTenant.metadata;
+      ? { ...existingTenant?.metadata, ...data.metadata }
+      : existingTenant?.metadata || {};
     const updatedTenant: Tenant = {
-      ...existingTenant,
+      ...(existingTenant || {
+        id: tenantId,
+        slug: data.slug || tenantId,
+        createdAt: data.created_at || new Date().toISOString()
+      }),
       name: data.name,
       ownerName: data.owner_name,
       ownerEmail: data.owner_email,
-      ownerPhone: metadata.phone || '',
+      ownerPhone: data.owner_phone || metadata.phone || '',
       guildType: data.guild_type,
       status: data.status,
       metadata
     };
-    const updatedTenants = availableTenants.map(tenant =>
-      tenant.id === tenantId ? updatedTenant : tenant
-    );
+    const updatedTenants = existingTenant
+      ? availableTenants.map(tenant => tenant.id === tenantId ? updatedTenant : tenant)
+      : [...availableTenants, updatedTenant];
     setAvailableTenants(updatedTenants);
     HabinoAuthEngine.saveTenants(updatedTenants);
 
@@ -1283,6 +1402,7 @@ if (currentUser) {
   };
 
   const createTenantUser = async (userData: Omit<AppUser, 'id' | 'createdAt'>): Promise<AppUser> => {
+    assertCanMutateData('create');
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     if (sessionError) throw new Error(`بررسی نشست دعوت عضو ناموفق بود: ${sessionError.message}`);
     if (!session?.access_token) throw new Error('برای دعوت عضو، ابتدا با حساب مدیر سازمان وارد شوید.');
@@ -1328,6 +1448,7 @@ if (currentUser) {
   };
 
   const updateTenantUser = async (id: string, updates: Partial<AppUser>): Promise<void> => {
+    assertCanMutateData('update');
     const targetUser = tenantUsers.find(user => user.id === id);
     if (!targetUser || (updates.status !== 'active' && updates.status !== 'disabled')) {
       throw new Error('عضو یا وضعیت جدید معتبر نیست.');
@@ -1362,6 +1483,7 @@ if (currentUser) {
   };
 
   const deleteTenantUser = async (id: string): Promise<void> => {
+    assertCanMutateData('delete');
     const targetUser = tenantUsers.find(user => user.id === id);
     if (!targetUser) throw new Error('عضو موردنظر در فهرست کاربران پیدا نشد.');
 
@@ -1398,107 +1520,6 @@ if (currentUser) {
     }
   };
 
-  const changeUserRole = async (userId: string, newRole: UserRole): Promise<{ success: boolean; message: string }> => {
-    if (currentUser?.role !== 'super_admin') {
-      return { success: false, message: 'تغییر نقش کاربر فقط برای سوپرادمین مجاز است.' };
-    }
-
-    const targetUser = tenantUsers.find(user => user.id === userId);
-    if (!targetUser) {
-      return { success: false, message: 'کاربر موردنظر در فهرست کاربران یافت نشد.' };
-    }
-
-    // Prevent demoting the last super_admin without a replacement
-    if (targetUser.role === 'super_admin' && newRole !== 'super_admin') {
-      const superAdminCount = tenantUsers.filter(u => u.role === 'super_admin').length;
-      if (superAdminCount <= 1) {
-        return { success: false, message: 'نمی‌توان آخرین سوپرادمین را بدون معرفی جایگزين تغییر نقش داد.' };
-      }
-    }
-
-    // Prevent self-demotion
-    if (targetUser.id === currentUser?.id && newRole !== 'super_admin') {
-      return { success: false, message: 'نمی‌توانید نقش خود را از سوپرادمین تغییر دهید.' };
-    }
-
-    try {
-      const response = await fetch('/api/auth/platform-users/role', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          userId,
-          newRole,
-          changedBy: currentUser.id,
-          changedByEmail: currentUser.email
-        })
-      });
-      const responseData = await response.json().catch(() => null);
-      if (!response.ok || responseData?.success !== true) {
-        throw new Error(responseData?.error || 'تغییر نقش کاربر ناموفق بود.');
-      }
-
-      const updatedUser = responseData.user as AppUser;
-      const updated = tenantUsers.map(user => user.id === userId ? updatedUser : user);
-      setTenantUsers(updated);
-      HabinoAuthEngine.saveUsers(updated);
-
-      if (currentUser.id === userId) {
-        setCurrentUser(updatedUser);
-        HabinoAuthEngine.saveCurrentUser(updatedUser);
-      }
-
-      void recordSystemAuditEvent({
-        action: 'SUPER_ADMIN_ROLE_CHANGED',
-        tenantId: targetUser.tenantId,
-        resourceType: 'user',
-        resourceId: userId,
-        reasonCode: `تغییر نقش کاربر ${targetUser.fullName} از «${targetUser.role}» به «${newRole}» توسط ${currentUser.fullName}`,
-        outcome: 'succeeded'
-      });
-
-      recordImmutableAuditEvent({
-        action: 'SUPER_ADMIN_ROLE_CHANGED',
-        actorId: currentUser.id,
-        actorRole: currentUser.role,
-        tenantId: targetUser.tenantId,
-        resourceType: 'user',
-        resourceId: userId,
-        correlationId: null,
-        outcome: 'succeeded',
-        reasonCode: `تغییر نقش کاربر ${targetUser.fullName} از «${targetUser.role}» به «${newRole}» توسط ${currentUser.fullName}`,
-        eventSource: 'application'
-      });
-
-      return { success: true, message: `نقش کاربر ${targetUser.fullName} به «${ROLE_DETAILS_FA[newRole]?.title || newRole}» تغییر یافت.` };
-    } catch (err: any) {
-      void recordSystemAuditEvent({
-        action: 'SUPER_ADMIN_ROLE_CHANGED',
-        tenantId: targetUser.tenantId,
-        resourceType: 'user',
-        resourceId: userId,
-        reasonCode: `خطا در تغییر نقش کاربر ${targetUser.fullName}: ${err.message}`,
-        outcome: 'failed'
-      });
-
-      recordImmutableAuditEvent({
-        action: 'SUPER_ADMIN_ROLE_CHANGED',
-        actorId: currentUser.id,
-        actorRole: currentUser.role,
-        tenantId: targetUser.tenantId,
-        resourceType: 'user',
-        resourceId: userId,
-        correlationId: null,
-        outcome: 'failed',
-        reasonCode: `خطا در تغییر نقش کاربر ${targetUser.fullName}: ${err.message}`,
-        eventSource: 'application'
-      });
-
-      return { success: false, message: err.message || 'خطای نامشخص در تغییر نقش کاربر.' };
-    }
-  };
-
   const recordImmutableAuditEvent = (event: Omit<SystemAuditLog, 'id' | 'timestamp'>) => {
     const newLog: SystemAuditLog = {
       ...event,
@@ -1512,12 +1533,27 @@ if (currentUser) {
     return HabinoAuthEngine.hasPermission(currentUser, permission);
   };
 
-  const canAccessModule = (moduleId: string): { allowed: boolean; reasonFa?: string; gateType?: 'plan' | 'role' | 'platform' | 'release'; requiredPlan?: SubscriptionPlanType } => {
-    return HabinoAuthEngine.canAccessModule(currentUser, moduleId, activeTenant);
+  const canAccessModule = (
+    moduleId: string,
+    options?: { isImpersonatingReadOnly?: boolean }
+  ): { allowed: boolean; reasonFa?: string; gateType?: 'plan' | 'role' | 'platform' | 'release'; requiredPlan?: SubscriptionPlanType } => {
+    return HabinoAuthEngine.canAccessModule(currentUser, moduleId, activeTenant, {
+      isImpersonatingReadOnly: options?.isImpersonatingReadOnly ??
+        (impersonationSession?.isActive === true && impersonationSession.readOnly)
+    });
   };
 
   const canMutateData = (action: 'create' | 'update' | 'delete'): { allowed: boolean; reasonFa?: string } => {
-    return HabinoAuthEngine.canMutateData(currentUser, action);
+    return HabinoAuthEngine.canMutateData(currentUser, action, {
+      isImpersonatingReadOnly: impersonationSession?.isActive === true && impersonationSession.readOnly
+    });
+  };
+
+  const assertCanMutateData = (action: 'create' | 'update' | 'delete'): void => {
+    const permission = canMutateData(action);
+    if (!permission.allowed) {
+      throw new Error(permission.reasonFa || 'این عملیات در دسترس نیست.');
+    }
   };
 
   const upgradeTenantSubscription = async (plan: SubscriptionPlanType, serialKey?: string): Promise<{ success: boolean; message: string }> => {
@@ -1772,6 +1808,7 @@ if (currentUser) {
   };
 
   const addInvoice = async (invoiceData: Omit<Invoice, 'id'>): Promise<Invoice> => {
+    assertCanMutateData('create');
     const invoiceClientId = invoiceData.clientId || invoiceData.client_id;
     const currentTenant = resolveInvoiceTenant(invoiceClientId, invoiceData.tenantId);
     const correlationId = createDiagnosticCorrelationId();
@@ -1869,6 +1906,7 @@ if (currentUser) {
   };
 
   const updateInvoice = async (id: string, updated: Partial<Invoice>) => {
+    assertCanMutateData('update');
     const existing = invoices.find(inv => inv.id === id);
     if (!existing) {
       throw new Error('سند موردنظر یافت نشد.');
@@ -2031,6 +2069,7 @@ if (currentUser) {
   };
 
   const deleteInvoice = async (id: string) => {
+    assertCanMutateData('delete');
     const deletedInv = invoices.find(i => i.id === id);
     if (!deletedInv) {
       throw new Error('سند موردنظر یافت نشد.');
@@ -2117,6 +2156,7 @@ if (currentUser) {
   };
 
   const restoreInvoice = async (id: string) => {
+    assertCanMutateData('update');
     const target = invoices.find(i => i.id === id);
     if (!target) return;
 
@@ -2171,6 +2211,7 @@ if (currentUser) {
   };
 
   const addCheck = async (checkData: Omit<Check, 'id'>): Promise<Check> => {
+    assertCanMutateData('create');
     const currentTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
 
     const clientMap = new Map<string, Client>();
@@ -2239,6 +2280,7 @@ if (currentUser) {
   };
 
   const updateCheck = async (id: string, updated: Partial<Check>) => {
+    assertCanMutateData('update');
     const currentTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
 
     const currentSnapshot = {
@@ -2318,6 +2360,7 @@ if (currentUser) {
   };
 
   const deleteCheck = async (id: string) => {
+    assertCanMutateData('delete');
     const currentSnapshot = {
       invoices: financialStateRef.current.invoices,
       accountingEntries: financialStateRef.current.accountingEntries,
@@ -2347,6 +2390,7 @@ if (currentUser) {
   };
 
   const addTransaction = async (txData: Omit<Transaction, 'id'>): Promise<Transaction> => {
+    assertCanMutateData('create');
     const currentTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
 
     const currentSnapshot = {
@@ -2409,6 +2453,7 @@ if (currentUser) {
   };
 
   const deleteTransaction = async (id: string) => {
+    assertCanMutateData('delete');
     const deletedTransaction = financialStateRef.current.transactions.find(transaction => transaction.id === id);
     const currentSnapshot = {
       invoices: financialStateRef.current.invoices,
@@ -2456,6 +2501,7 @@ if (currentUser) {
   };
 
   const addClient = async (clientData: Omit<Client, 'id'>): Promise<Client> => {
+    assertCanMutateData('create');
     if (settings.openingPeriodStatus === 'completed' && Number(clientData.balance || 0) !== 0) {
       throw new Error('پس از پایان عملیات اول دوره، مانده طرف‌حساب باید با سند حسابداری ثبت شود.');
     }
@@ -2521,6 +2567,7 @@ if (currentUser) {
   };
 
   const updateClient = async (id: string, updated: Partial<Client>, openingBalanceUpdate = false) => {
+    assertCanMutateData('update');
     if (openingBalanceUpdate && settings.openingPeriodStatus === 'completed') {
       throw new Error('پس از پایان عملیات اول دوره، اصلاح مانده فقط با سند حسابداری مجاز است.');
     }
@@ -2582,6 +2629,7 @@ if (currentUser) {
   };
 
   const deleteClient = async (id: string) => {
+    assertCanMutateData('delete');
     const currentTenant = (activeTenantId && activeTenantId !== 'all')
       ? activeTenantId
       : (currentUser?.tenantId && currentUser.tenantId !== 'all')
@@ -2626,6 +2674,7 @@ if (currentUser) {
   };
 
   const addInventoryItem = async (itemData: Omit<InventoryItem, 'id'>): Promise<InventoryItem> => {
+    assertCanMutateData('create');
     if (settings.openingPeriodStatus === 'completed' && Number(itemData.stock || 0) !== 0) {
       throw new Error('پس از پایان عملیات اول دوره، ورود موجودی فقط با ثبت فاکتور خرید مجاز است.');
     }
@@ -2647,6 +2696,7 @@ if (currentUser) {
   };
 
   const updateInventoryItem = async (id: string, updated: Partial<InventoryItem>) => {
+    assertCanMutateData('update');
     const existingItem = inventory.find(item => item.id === id);
     if (!existingItem) {
       throw new Error('کالای موردنظر یافت نشد.');
@@ -2696,6 +2746,7 @@ if (currentUser) {
   };
 
   const deleteInventoryItem = async (id: string) => {
+    assertCanMutateData('delete');
     const item = inventory.find(existing => existing.id === id);
     if (!item) {
       throw new Error('کالای موردنظر یافت نشد.');
@@ -2710,6 +2761,7 @@ if (currentUser) {
   };
 
   const createInstallmentPlan = async (input: CreateInstallmentPlanInput): Promise<Installment[]> => {
+    assertCanMutateData('create');
     if (!hasPermission('accounting:manage_installments')) {
       throw new Error('مجوز تأیید برنامه اقساط را ندارید.');
     }
@@ -2758,6 +2810,7 @@ if (currentUser) {
     request: Pick<Installment, 'invoiceId' | 'installmentNumber' | 'totalInstallments' | 'amount' | 'dueDate' | 'clientId'> &
       Partial<Pick<Installment, 'clientName' | 'status'>>
   ): Promise<Installment> => {
+    assertCanMutateData('create');
     if (request.installmentNumber !== 1) {
       throw new Error('برنامه اقساط باید یک‌جا و از فاکتور معتبر ایجاد شود.');
     }
@@ -2778,6 +2831,7 @@ if (currentUser) {
   };
 
   const recordInstallmentPayment = async (input: RecordInstallmentPaymentInput): Promise<Transaction> => {
+    assertCanMutateData('create');
     if (!hasPermission('accounting:manage_installments')) {
       throw new Error('مجوز ثبت دریافت قسط را ندارید.');
     }
@@ -2821,6 +2875,7 @@ if (currentUser) {
   };
 
   const addBankAccount = async (bankData: Omit<BankAccount, 'id'>): Promise<BankAccount> => {
+    assertCanMutateData('create');
     if (settings.openingPeriodStatus === 'completed' && Number(bankData.balance || 0) !== 0) {
       throw new Error('پس از پایان عملیات اول دوره، مانده صندوق یا بانک باید با سند دریافت یا پرداخت ثبت شود.');
     }
@@ -2854,14 +2909,17 @@ if (currentUser) {
   };
 
   const updateBankAccount = async (id: string, updated: Partial<BankAccount>) => {
+    assertCanMutateData('update');
     setBankAccounts(prev => prev.map(b => b.id === id ? { ...b, ...updated } : b));
   };
 
   const deleteBankAccount = async (id: string) => {
+    assertCanMutateData('delete');
     setBankAccounts(prev => prev.filter(b => b.id !== id));
   };
 
   const addProject = async (projData: Omit<Project, 'id'>): Promise<Project> => {
+    assertCanMutateData('create');
     if (!projData.clientId || projData.clientId.trim() === '') {
       throw new Error('ثبت سند بدون انتخاب مخاطب مجاز نیست.');
     }
@@ -2897,6 +2955,7 @@ if (currentUser) {
   };
 
   const updateProject = async (id: string, updated: Partial<Project>) => {
+    assertCanMutateData('update');
     const updatedProject = financialStateRef.current.projects.find(project => project.id === id);
     if (!updatedProject) throw new Error('پروژه موردنظر یافت نشد.');
     const nextProject = { ...updatedProject, ...updated };
@@ -2915,6 +2974,7 @@ if (currentUser) {
   };
 
   const deleteProject = async (id: string) => {
+    assertCanMutateData('delete');
     const currentSnapshot = {
       invoices: financialStateRef.current.invoices,
       accountingEntries: financialStateRef.current.accountingEntries,
@@ -2951,6 +3011,7 @@ if (currentUser) {
     date: string;
     description: string;
   }): Promise<void> => {
+    assertCanMutateData('create');
     const currentTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
 
     const currentSnapshot = {
@@ -2987,6 +3048,7 @@ if (currentUser) {
     projectId: string;
     date: string;
   }): Promise<void> => {
+    assertCanMutateData('update');
     const currentTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
 
     const currentSnapshot = {
@@ -3019,6 +3081,7 @@ if (currentUser) {
     settlements: BatchInvoiceSettlementItem[],
     operationDate?: string
   ): Promise<BatchSettlementResult> => {
+    assertCanMutateData('update');
     const currentTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
 
     const currentSnapshot = {
@@ -3060,6 +3123,7 @@ if (currentUser) {
   const closeFiscalYear = async (
     params: CloseFiscalYearParams
   ): Promise<CloseFiscalYearResult> => {
+    assertCanMutateData('update');
     const currentTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
 
     const currentSnapshot = {
@@ -3089,6 +3153,7 @@ if (currentUser) {
   };
 
   const addAccountingEntry = async (entryData: Omit<AccountingEntry, 'id'>): Promise<AccountingEntry> => {
+    assertCanMutateData('create');
     // 🛡️ هدایت ثبت تک‌سندی به گارد توازن دفتر کل برای جلوگیری از ثبت آرتیکل‌های ناتراز
     const [createdEntry] = await addAccountingEntries([entryData]);
     return createdEntry;
@@ -3097,6 +3162,7 @@ if (currentUser) {
   const addAccountingEntries = async (
     entryData: Omit<AccountingEntry, 'id'>[]
   ): Promise<AccountingEntry[]> => {
+    assertCanMutateData('create');
     if (entryData.length === 0) return [];
 
     const currentTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
@@ -3131,6 +3197,7 @@ if (currentUser) {
   };
 
   const updateSettings = async (newSettings: Partial<CompanySettings>): Promise<{ success: boolean; message: string; savedInCloud: boolean }> => {
+    assertCanMutateData('update');
     const targetTenantId = (activeTenantId && activeTenantId !== 'all') ? activeTenantId : 'tenant-main';
 
     const mergedSettings: CompanySettings = {
@@ -3175,6 +3242,10 @@ if (currentUser) {
   };
 
   const activateLicense = async (serialKey: string, holderName?: string, expectedPlan?: SubscriptionPlanType): Promise<{ success: boolean; message: string }> => {
+    const mutationPermission = canMutateData('update');
+    if (!mutationPermission.allowed) {
+      return { success: false, message: mutationPermission.reasonFa || 'فعال‌سازی لایسنس در حالت مشاهده فقط‌خواندنی مجاز نیست.' };
+    }
     if (!getSupabaseConfig().isConfigured) {
       return { success: false, message: 'فعال‌سازی لایسنس به سرویس امن هابینو نیاز دارد؛ حالت محلی نمی‌تواند اعتبار کلید را تأیید کند.' };
     }
@@ -3278,6 +3349,10 @@ if (currentUser) {
   };
 
   const activateMarketFullEdition = async (companyName?: string): Promise<{ success: boolean; message: string }> => {
+    const mutationPermission = canMutateData('update');
+    if (!mutationPermission.allowed) {
+      return { success: false, message: mutationPermission.reasonFa || 'فعال‌سازی در حالت مشاهده فقط‌خواندنی مجاز نیست.' };
+    }
     if (!import.meta.env.DEV) {
       return {
         success: false,
@@ -3307,6 +3382,7 @@ if (currentUser) {
 
   const restoreFullBackup = async (snapshot: BackupSnapshot): Promise<{ success: boolean; message: string }> => {
     try {
+      assertCanMutateData('update');
       if (!snapshot.data) {
         return { success: false, message: 'ساختار فایل پشتیبان نامعتبر است.' };
       }
@@ -3388,6 +3464,7 @@ if (currentUser) {
     mode: 'full' | 'preserve_inventory' | 'preserve_contacts_inventory' = 'preserve_inventory',
     tenantId: string = activeTenantId || 'tenant-main'
   ) => {
+    assertCanMutateData('delete');
     const preserveInventory = mode !== 'full';
     const targetTenant = tenantId;
     const remainingInvoices = removeRowsForTenant(financialStateRef.current.invoices, targetTenant);
@@ -3523,6 +3600,13 @@ if (currentUser) {
     message: string;
     counts?: Record<string, number>;
   }> => {
+    const mutationPermission = canMutateData('update');
+    if (!mutationPermission.allowed) {
+      return {
+        success: false,
+        message: mutationPermission.reasonFa || 'همگام‌سازی نوشتنی در حالت مشاهده فقط‌خواندنی مجاز نیست.'
+      };
+    }
     if (!isLocalHydrationComplete) {
       return {
         success: false,
@@ -3878,9 +3962,12 @@ if (currentUser) {
       }, 120000);
     };
 
-    const performAutoBootSync = async (tenantToSync?: string) => {
+    const performAutoBootSync = async (tenantToSync?: string, options?: { readOnly?: boolean }) => {
       if (!isLocalHydrationComplete) return;
       const targetTenant = tenantToSync || activeTenantId || 'tenant-main';
+      const readOnlyMode = options?.readOnly === true ||
+        currentUser?.role === 'hubino_support' ||
+        (impersonationSession?.isActive === true && impersonationSession.readOnly);
 
       // ۰. پایش همگرایی ریست فکتوری ابری میان دستگاه‌ها و مرورگرها (Multi-Device Reset Convergence Probe)
       // اگر مستأجر روی دستگاه یا محیط دیگری ریست شده باشد، این کلاینت فوراً کش کهنه خود را نابود می‌کند
@@ -3889,18 +3976,20 @@ if (currentUser) {
       let remoteResetAt: string | null = null;
 
       // منبع ۱: استعلام مستقیم از اندپوینت اختصاصی سرور
-      try {
-        const resetStatusRes = await fetch(`/api/tenant/reset-status?tenantId=${encodeURIComponent(targetTenant)}`);
-        if (resetStatusRes.ok) {
-          const resetStatus = await resetStatusRes.json();
-          if (resetStatus.success) {
-            remoteVersion = Number(resetStatus.factory_reset_version || 0);
-            remoteMode = resetStatus.factory_reset_mode || 'preserve_inventory';
-            remoteResetAt = resetStatus.factory_reset_at || null;
+      if (!readOnlyMode) {
+        try {
+          const resetStatusRes = await fetch(`/api/tenant/reset-status?tenantId=${encodeURIComponent(targetTenant)}`);
+          if (resetStatusRes.ok) {
+            const resetStatus = await resetStatusRes.json();
+            if (resetStatus.success) {
+              remoteVersion = Number(resetStatus.factory_reset_version || 0);
+              remoteMode = resetStatus.factory_reset_mode || 'preserve_inventory';
+              remoteResetAt = resetStatus.factory_reset_at || null;
+            }
           }
+        } catch (probeErr) {
+          console.warn('[AutoBoot] Reset status server probe warning:', probeErr);
         }
-      } catch (probeErr) {
-        console.warn('[AutoBoot] Reset status server probe warning:', probeErr);
       }
 
       // استعلام و همگام‌سازی پیکربندی سوپابیس با سرور در صورت عدم بارگذاری اولیه
@@ -3936,7 +4025,7 @@ if (currentUser) {
 
       const localKnownVersion = Number(localStorage.getItem(`habino_last_known_reset_version_${targetTenant}`) || 0);
 
-      if (remoteVersion > 0 && remoteVersion > localKnownVersion) {
+      if (!readOnlyMode && remoteVersion > 0 && remoteVersion > localKnownVersion) {
         if (remoteMode === 'full') {
           console.log(`[AutoBoot] Full point-zero factory reset detected (${remoteVersion} > ${localKnownVersion}); completely zeroing all local collections...`);
           await executeLocalPurgeOnly('full', targetTenant);
@@ -3979,17 +4068,19 @@ if (currentUser) {
       }
 
       // ۱. دریافت و ادغام امضاهای سمت سرور
-      try {
-        const sigRes = await fetch('/api/invoices/signatures/map');
-        if (sigRes.ok) {
-          const sigData = await sigRes.json();
-          if (sigData.success && sigData.signatures) {
-            const currentLocal = JSON.parse(localStorage.getItem('habino_invoice_signatures') || '{}');
-            const merged = { ...currentLocal, ...sigData.signatures };
-            localStorage.setItem('habino_invoice_signatures', JSON.stringify(merged));
+      if (!readOnlyMode) {
+        try {
+          const sigRes = await fetch('/api/invoices/signatures/map');
+          if (sigRes.ok) {
+            const sigData = await sigRes.json();
+            if (sigData.success && sigData.signatures) {
+              const currentLocal = JSON.parse(localStorage.getItem('habino_invoice_signatures') || '{}');
+              const merged = { ...currentLocal, ...sigData.signatures };
+              localStorage.setItem('habino_invoice_signatures', JSON.stringify(merged));
+            }
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
 
       if (!config.isConfigured) return;
 
@@ -4003,7 +4094,7 @@ if (currentUser) {
       // ۳. واکشی و ادغام خودکار داده‌های ابری در شروع برنامه (Silent Auto-Hydration)
       if (mounted) {
         try {
-          await offlineOutbox.flushQueue();
+          if (!readOnlyMode) await offlineOutbox.flushQueue();
           await syncFromSupabase(targetTenant);
         } catch (syncErr) {
           console.warn('[Auto-Hydration] Background cloud sync skipped/failed:', syncErr);
@@ -4100,7 +4191,7 @@ if (currentUser) {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('online', handleNetworkOnline);
     };
-  }, [activeTenantId, currentUser?.id, currentUser?.role, isLocalHydrationComplete]);
+  }, [activeTenantId, currentUser?.id, currentUser?.role, isLocalHydrationComplete, impersonationSession?.isActive, impersonationSession?.readOnly]);
 
   const pushToSupabase = async (): Promise<{
     success: boolean;
@@ -4132,6 +4223,7 @@ if (currentUser) {
   };
 
   const reconcileLedgerAndOpeningBalances = (): any => {
+    assertCanMutateData('update');
     const currentTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
     const { reconciledEntries, report } = SupabaseSyncEngine.reconcileLedgerAndOpeningBalances(
       {
@@ -4191,6 +4283,7 @@ if (currentUser) {
   };
 
   const processBazaarPurchaseIap = async (skuId: BazaarProductSkuId, clientId?: string): Promise<BazaarPurchaseVerificationResponse> => {
+    assertCanMutateData('create');
     const targetClient = clients.find(c => c.id === clientId) || clients[0] || {
       id: clientId || 'c-bazaar-direct',
       name: 'کاربر خریدار بازار',
@@ -4226,6 +4319,7 @@ if (currentUser) {
   };
 
   const purgeInterferingPnLData = async (): Promise<{ success: boolean; message: string; remainingInvoiceCount: number }> => {
+    assertCanMutateData('delete');
     const targetTenant = activeTenantId || currentUser?.tenantId || 'tenant-main';
     const remainingTransactions = removeRowsForTenant(financialStateRef.current.transactions, targetTenant);
     const remainingProjects = removeRowsForTenant(financialStateRef.current.projects, targetTenant);
@@ -4258,6 +4352,7 @@ if (currentUser) {
     mode: 'full' | 'preserve_inventory' = 'preserve_inventory',
     confirmationPhrase: string = 'حذف داده‌های مالی'
   ): Promise<{ success: boolean; message: string; details?: any }> => {
+    assertCanMutateData('delete');
     const preserveInventory = mode === 'preserve_inventory';
     const rawTargetTenant = currentUser && currentUser.role !== 'super_admin'
       ? currentUser.tenantId || activeTenantId || 'tenant-main'
@@ -4547,6 +4642,7 @@ if (currentUser) {
     settings: effectiveSettings,
     license,
     activeTenantId,
+    impersonationSession,
     isOnline,
     currentUser,
     activeTenant,
@@ -4560,12 +4656,12 @@ if (currentUser) {
     registerTenant,
     logout,
     switchTenant,
+    exitImpersonation,
     updatePlatformTenantAccount,
     createTenantUser,
     refreshTenantUsers,
     updateTenantUser,
     deleteTenantUser,
-    changeUserRole,
     hasPermission,
     canAccessModule,
     canMutateData,
@@ -4628,7 +4724,8 @@ if (currentUser) {
     isolatedInventory, isolatedInstallments, isolatedBankAccounts, isolatedProjects,
     isolatedAccountingEntries, invoices, clients, checks, transactions,
     accountingEntries, effectiveSettings, license, activeTenantId, isOnline,
-    currentUser, activeTenant, availableTenants, tenantUsers, auditLogs, systemAuditLogs, isSupabaseLive
+    currentUser, activeTenant, availableTenants, tenantUsers, auditLogs, systemAuditLogs,
+    isSupabaseLive, impersonationSession
   ]);
 
   return (

@@ -67,6 +67,7 @@ import {
   PAYROLL_EDIT_EMPLOYEE_KEY,
   INITIAL_EMPLOYEES
 } from '../lib/payrollEngine';
+import { OnlineAddressMapPicker } from './common/OnlineAddressMapPicker';
 import { PayrollSummaryCards } from './PayrollSummaryCards';
 import { CalendarJalaliDateInput } from './CalendarJalaliDateInput';
 import { getCurrentJalaliDate } from '../lib/dateUtils';
@@ -1478,6 +1479,39 @@ export const PayrollStudio: React.FC = () => {
                     saveStoredSSOConfig(updated, activeTenantId);
                   }}
                   className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-medium focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div className="sm:col-span-2 lg:col-span-4">
+                <label className="text-slate-600 block mb-1">نشانی کارگاه (فیلد DSK_ADR، حداکثر ۱۰۰ نویسه):</label>
+                <input
+                  type="text"
+                  maxLength={100}
+                  value={ssoConfig.workshopAddress}
+                  onChange={event => {
+                    const updated = { ...ssoConfig, workshopAddress: event.target.value };
+                    setSsoConfig(updated);
+                    saveStoredSSOConfig(updated, activeTenantId);
+                  }}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-indigo-500"
+                />
+                <OnlineAddressMapPicker
+                  value={ssoConfig.workshopAddress}
+                  postalCode={ssoConfig.postalCode}
+                  lat={ssoConfig.latitude}
+                  lng={ssoConfig.longitude}
+                  maxLength={100}
+                  label="نشانی کارگاه"
+                  onSelectAddress={payload => {
+                    const updated = {
+                      ...ssoConfig,
+                      workshopAddress: payload.address.slice(0, 100),
+                      postalCode: payload.postalCode,
+                      latitude: payload.lat,
+                      longitude: payload.lng
+                    };
+                    setSsoConfig(updated);
+                    saveStoredSSOConfig(updated, activeTenantId);
+                  }}
                 />
               </div>
             </div>

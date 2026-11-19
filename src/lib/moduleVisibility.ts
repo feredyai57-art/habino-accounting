@@ -7,6 +7,8 @@ const GUILD_RELEVANT_MODULES: Record<string, GuildType[]> = {
   payroll: ['services', 'technology', 'contracting', 'commercial'] // در دسترس تمامی اصناف، کارگاه‌ها و دفاتر فنی دارای پرسنل و بیمه
 };
 
+export const ENABLE_OS_DESKTOP = false;
+
 export const isModuleRelevantToGuild = (
   moduleId: string,
   guildType?: GuildType

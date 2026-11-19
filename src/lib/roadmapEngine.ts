@@ -102,12 +102,39 @@ export const ROADMAP_PHASES: RoadmapPhase[] = [
     badge: 'مأموریت عرضه بازار (P0)'
   },
   {
-    id: 'phase-5',
+    id: 'phase-mena-foundation',
     number: 6,
-    title: 'فاز ۶: شبکه تسویه همتابه‌همتا (P2P State Sync) و خردپرداخت‌ها',
+    title: 'فاز ۶: زیرساخت چندکشوری خاورمیانه (MENA Localization: فارسی، عربی و انگلیسی) و پشتیبانی ریموت دولایه',
+    tagline: 'جداسازی Locale از ارز پایه، پشتیبانی اعشار ۰/۲/۳ رقمی، تقویم شمسی/میلادی/هجری، RTL/LTR، بسته انطباق کشوری و پشتیبانی بدون مراجعه حضوری',
+    status: 'planned' as unknown as 'future',
+    targetTimeline: 'اولویت بازار منطقه‌ای (Q2 1404)',
+    badge: 'بازار خاورمیانه (MENA)'
+  } as RoadmapPhase,
+  {
+    id: 'phase-windows-local',
+    number: 7,
+    title: 'فاز ۷: نسخه دسکتاپ محلی ویندوز با دیتابیس SQLite (استقرار کاملاً آفلاین و بومی)',
+    tagline: 'بسته نصبی ویندوز (Electron/Tauri + SQLite) بدون نیاز به سرور ابری، همگام با هسته حسابداری واحد',
+    status: 'future',
+    targetTimeline: 'چشم‌انداز (Q3 1404)',
+    badge: 'نسخه محلی ویندوز'
+  },
+  {
+    id: 'phase-hybrid-lan',
+    number: 8,
+    title: 'فاز ۸: سرور شبکه داخلی هیبرید (Hybrid LAN) و همگام‌سازی اختیاری ابری',
+    tagline: 'استقرار سرور Node.js روی سیستم کارفرما در شبکه محلی (۲ تا ۱۰ کاربر) با همگام‌سازی زمان‌بندی‌شده به ابر در صورت داشتن اینترنت',
+    status: 'future',
+    targetTimeline: 'چشم‌انداز (Q4 1404)',
+    badge: 'استقرار هیبرید شبکه'
+  },
+  {
+    id: 'phase-5',
+    number: 9,
+    title: 'فاز ۹: شبکه تسویه همتابه‌همتا (P2P State Sync) و خردپرداخت‌ها',
     tagline: 'همگام‌سازی توزیع‌شده اسناد مالی میان مستأجران بدون نیاز به سرور مرکزی در تبادلات بین‌اصناف',
     status: 'future',
-    targetTimeline: 'چشم‌انداز (Q2 1404)',
+    targetTimeline: 'چشم‌انداز (Q1 1405)',
     badge: 'تحقیقات معماری'
   }
 ];
@@ -200,6 +227,39 @@ export const INITIAL_ADRS: ArchitectureDecisionRecord[] = [
     consequences: 'تضمین پاسخ‌دهی زیر ۱۰۰ میلی‌ثانیه تحت بار سنگین، ایزولاسیون کامل بار پردازشی ماژول‌ها، عدم مسدود شدن لجر توسط سرویس‌های هوش مصنوعی، و پایداری تضمین‌شده از دمو تا مقیاس کلان ملی.',
     technicalOwner: 'معمار ارشد سیستم‌عامل هابینو و تیم ارکستراسیون سایرافلو',
     updatedAt: '1403/06/25'
+  },
+  {
+    id: 'adr-009',
+    code: 'ADR-009',
+    title: 'معماری ۳ حالت استقرار (Cloud / Local SQLite / Hybrid LAN) روی هسته محاسباتی واحد',
+    status: 'accepted',
+    context: 'بازارهای خاورمیانه (ایران، عراق، افغانستان، امارات، عربستان) به دلیل محدودیت‌های اینترنت، حساسیت امنیتی داده یا تعداد کاربر شعبه، همزمان نیازمند نسخه ابری، نسخه محلی ویندوز و سرور شبکه داخلی هستند.',
+    decision: 'انتزاع لایه ذخیره‌سازی پشت یک StorageAdapter مشترک به طوری که ۱۰۰٪ هسته حسابداری دوبل، مودیان و UI در سه حالت Cloud (Supabase)، Local Windows (SQLite) و Hybrid LAN (سرور محلی + همگام‌سازی اختیاری ابری) یکسان عمل کند.',
+    consequences: 'کاهش هزینه نگهداری به یک کدبیس واحد، حذف اجبار سرور ابری برای مشتریان آفلاین و امکان ارتقای تدریجی از محلی به هیبرید بدون مهاجرت پیچیده.',
+    technicalOwner: 'معمار ارشد هابینو و مهندس فرید تهرانی',
+    updatedAt: '1405/08/28'
+  },
+  {
+    id: 'adr-010',
+    code: 'ADR-010',
+    title: 'استاندارد چندکشوری خاورمیانه (MENA): تفکیک Locale از ارز، دقت ۰/۲/۳ اعشار و بسته انطباق کشوری',
+    status: 'accepted',
+    context: 'توسعه در بازارهای فارسی‌زبان (ایران، افغانستان)، عربی (عراق، امارات، عربستان، عمان/کویت/بحرین) و انگلیسی نیازمند پشتیبانی دقیق از ارزهای بدون اعشار (IRR/IQD)، دو اعشاری (AED/SAR/USD) و سه اعشاری (KWD/BHD/OMR) و مالیات‌های مختلف است.',
+    decision: 'جداسازی کامل زبان/تقویم/جهت (Logical CSS برای RTL و LTR) از واحد پولی پایه مستأجر، نگهداری مبالغ با دقت اعشاری استاندارد در دیتابیس و کپسوله‌سازی قوانین مالیاتی و فاکتور الکترونیک هر کشور در Country Compliance Pack.',
+    consequences: 'ورود بدون بازنویسی هسته به کشورهای همسایه، عدم بروز خطای گردکردن دیناری/فلسی در کشورهای عربی و پشتیبانی بومی از زبان فارسی، عربی و انگلیسی.',
+    technicalOwner: 'معمار ارشد سیستم‌های مالی هابینو',
+    updatedAt: '1405/08/28'
+  },
+  {
+    id: 'adr-011',
+    code: 'ADR-011',
+    title: 'استاندارد پشتیبانی بدون مراجعه حضوری (Zero On-Site / 2-Layer Remote Support)',
+    status: 'accepted',
+    context: 'ارسال نیروی پشتیبان حضوری در مقیاس کشوری و منطقه‌ای (MENA) هزینه عملیاتی را به شدت افزایش می‌دهد و مقیاس‌پذیری را می‌شکند.',
+    decision: 'طراحی سیستم برای پشتیبانی ۱۰۰٪ ریموت در دو لایه: ۱) لایه اول درون‌برنامه‌ای (بسته تشخیصی امن بدون داده مالی خام، بررسی وضعیت Outbox/RLS و ارسال مستقیم از مرکز پشتیبانی با رضایت کاربر)، ۲) لایه دوم دسترسی ریموت دسکتاپ صرفاً در موارد ضروری با تایید صریح کارفرما.',
+    consequences: 'کاهش نزدیک به صفر نیاز به اعزام حضوری، کاهش زمان رفع خطا به چند دقیقه و حفظ حریم خصوصی داده‌های مالی مشتری.',
+    technicalOwner: 'تیم زیرساخت و پشتیبانی هابینو',
+    updatedAt: '1405/08/28'
   }
 ];
 
@@ -819,6 +879,132 @@ export const INITIAL_ROADMAP_MILESTONES: Milestone[] = [
     dependencies: ['m-301', 'm-401'],
     assigneeRole: 'پژوهشگر سیستم‌های توزیع‌شده',
     progressPercent: 0
+  },
+  {
+    id: 'm-601',
+    phaseId: 'phase-mena-foundation',
+    phaseTitle: 'فاز ۶: زیرساخت چندکشوری خاورمیانه (MENA) و پشتیبانی ریموت',
+    day: 45,
+    targetQuarter: '1404-Q2',
+    title: 'موتور i18n چندزبانه (فارسی، عربی، انگلیسی) و RTL/LTR منطقی با Logical CSS',
+    description: 'پیاده‌سازی سیستم ترجمه بومی (fa/ar/en)، نگاشت تقویم‌های شمسی، میلادی و هجری و جایگزینی جهت‌های فیزیکی CSS با Logical Properties (ms-/me-/ps-/pe-).',
+    status: 'planned',
+    category: 'architecture',
+    priority: 'P0',
+    complexity: 'high',
+    riskLevel: 'medium',
+    kpiMetric: 'سوئیچ لحظه‌ای میان ۳ زبان با حفظ ۱۰۰٪ چیدمان بدون شکستگی رابط کاربری',
+    technicalRationale: 'پیش‌نیاز ورود به بازارهای عربی خلیج فارس، عراق، افغانستان و مشتریان بین‌المللی انگلیسی‌زبان.',
+    adrRef: 'ADR-010',
+    techStack: ['i18n Engine', 'Intl Calendar/NumberFormat', 'Tailwind Logical CSS'],
+    dependencies: ['m-101'],
+    assigneeRole: 'مهندس ارشد فرانت‌اند و بومی‌سازی',
+    progressPercent: 0
+  },
+  {
+    id: 'm-602',
+    phaseId: 'phase-mena-foundation',
+    phaseTitle: 'فاز ۶: زیرساخت چندکشوری خاورمیانه (MENA) و پشتیبانی ریموت',
+    day: 52,
+    targetQuarter: '1404-Q2',
+    title: 'ارز پایه مستأجر با دقت اعشار ۰/۲/۳ و Country Compliance Pack (ایران، عراق، امارات، عربستان)',
+    description: 'پشتیبانی دقیق از ارزهای ۰ اعشاری (IRR/IQD/AFN)، ۲ اعشاری (AED/SAR/USD) و ۳ اعشاری (KWD/BHD/OMR) در تمام فرمول‌های فاکتور و تراز، همراه با ماژول مالیاتی کشورها (مودیان/ZATCA/FTA).',
+    status: 'planned',
+    category: 'accounting_ledger',
+    priority: 'P0',
+    complexity: 'epic',
+    riskLevel: 'high',
+    kpiMetric: 'صفر خطای گردکردن در تراز ۶ ستونی برای هر ۳ سطح اعشار ارزهای خاورمیانه',
+    technicalRationale: 'تضمین صحت ریاضی دفاتر دوبل در کشورهای عربی و بین‌المللی بدون نیاز به تغییر هسته.',
+    adrRef: 'ADR-010',
+    techStack: ['Multi-Precision Decimal', 'Tax Compliance Pack', 'Double-Entry Kernel'],
+    dependencies: ['m-601'],
+    assigneeRole: 'معمار ارشد سیستم‌های مالی',
+    progressPercent: 0
+  },
+  {
+    id: 'm-603',
+    phaseId: 'phase-mena-foundation',
+    phaseTitle: 'فاز ۶: زیرساخت چندکشوری خاورمیانه (MENA) و پشتیبانی ریموت',
+    day: 58,
+    targetQuarter: '1404-Q2',
+    title: 'بسته تشخیصی پشتیبانی ریموت دولایه (Zero On-Site Diagnostics Bundle)',
+    description: 'ایجاد خروجی امن وضعیت فنی (نسخه اپ، سلامت Sync/Outbox، شمارش خطاها، وضعیت لایسنس بدون افشای مبالغ اسناد) + ویزارد اتصال ریموت با تایید صریح کارفرما.',
+    status: 'planned',
+    category: 'pwa_devops',
+    priority: 'P1',
+    complexity: 'medium',
+    riskLevel: 'low',
+    kpiMetric: 'رفع حداقل ۹۰٪ تیکت‌های فنی بدون اعزام نیروی حضوری در کمتر از ۱۵ دقیقه',
+    technicalRationale: 'کاهش شدید هزینه پشتیبانی عملیاتی در سراسر ایران و کشورهای MENA.',
+    adrRef: 'ADR-011',
+    techStack: ['Support Bundle Diagnostics', 'Masked Telemetry', 'Remote Assist Bridge'],
+    dependencies: ['m-104'],
+    assigneeRole: 'مهندس زیرساخت و پشتیبانی فنی',
+    progressPercent: 0
+  },
+  {
+    id: 'm-701',
+    phaseId: 'phase-windows-local',
+    phaseTitle: 'فاز ۷: نسخه دسکتاپ محلی ویندوز با دیتابیس SQLite',
+    day: 70,
+    targetQuarter: '1404-Q3',
+    title: 'لایه انتزاع StorageAdapter و موتور ذخیره‌سازی محلی SQLite برای ویندوز (Electron/Tauri)',
+    description: 'پیاده‌سازی درایور محلی SQLite منطبق بر اسکیمای هسته حسابداری به همراه نصب‌کننده یک‌کلیکه ویندوز و بکاپ رمزنگاری‌شده خودکار روی درایو محلی.',
+    status: 'planned',
+    category: 'architecture',
+    priority: 'P1',
+    complexity: 'epic',
+    riskLevel: 'medium',
+    kpiMetric: 'نصب کامل در ویندوز زیر ۲ دقیقه با عملکرد آفلاین ۱۰۰٪ بدون نیاز به اینترنت',
+    technicalRationale: 'جذب کسب‌وکارهای سنتی و کارگاه‌هایی که به دلایل امنیتی یا زیرساختی ترجیح می‌دهند داده فقط روی سیستم خودشان باشد.',
+    adrRef: 'ADR-009',
+    techStack: ['SQLite (WAL Mode)', 'Tauri/Electron', 'StorageAdapter Pattern'],
+    dependencies: ['m-602'],
+    assigneeRole: 'مهندس سیستم‌های دسکتاپ و دیتابیس',
+    progressPercent: 0
+  },
+  {
+    id: 'm-801',
+    phaseId: 'phase-hybrid-lan',
+    phaseTitle: 'فاز ۸: سرور شبکه داخلی هیبرید (Hybrid LAN) و همگام‌سازی اختیاری ابری',
+    day: 85,
+    targetQuarter: '1404-Q4',
+    title: 'سرور محلی شبکه LAN (Multi-User On-Premise) با همگام‌سازی امن ابری',
+    description: 'پکیج سرور سبک Node.js + Postgres/SQLite روی سیستم اصلی دفتر جهت اتصال ۲ تا ۱۰ کلاینت از طریق Wi-Fi/LAN با صف Outbox برای همگام‌سازی دوره‌ای به ابر.',
+    status: 'planned',
+    category: 'multitenancy',
+    priority: 'P1',
+    complexity: 'epic',
+    riskLevel: 'high',
+    kpiMetric: 'همگام‌سازی بدون تعارض ۵ کلاینت همزمان در شبکه داخلی و تاب‌آوری قطع اینترنت',
+    technicalRationale: 'پاسخ به نیاز فروشگاه‌های زنجیره‌ای کوچک، کارگاه‌ها و شرکت‌هایی با چند صندوق و حسابدار در شبکه محلی.',
+    adrRef: 'ADR-009',
+    techStack: ['Local Express Server', 'PostgreSQL/SQLite', 'LAN mDNS & Cloud Outbox'],
+    dependencies: ['m-701'],
+    assigneeRole: 'معمار سیستم‌های توزیع‌شده و شبکه',
+    progressPercent: 0
+  },
+  {
+    id: 'm-802',
+    phaseId: 'phase-hybrid-lan',
+    phaseTitle: 'فاز ۸: سرور شبکه داخلی هیبرید (Hybrid LAN) و همگام‌سازی اختیاری ابری',
+    day: 92,
+    targetQuarter: '1404-Q4',
+    title: 'حالت سوئیچ شفاف بین استقرار ابری، محلی و هیبرید و مهاجرت داده یک‌کلیکه',
+    description: 'ابزار تبدیل و انتقال یکپارچه اسناد میان محیط Local SQLite، سرور LAN و فضای ابری Supabase با تضمین حفظ کامل تراز و شماره اسناد.',
+    status: 'planned',
+    category: 'accounting_ledger',
+    priority: 'P2',
+    complexity: 'high',
+    riskLevel: 'medium',
+    kpiMetric: 'انتقال ۱۰۰٪ اسناد و دفاتر دوبل بین سه حالت استقرار با اختلاف تراز ۰ ریال',
+    technicalRationale: 'امکان رشد تدریجی مشتری از نسخه رایگان محلی به سیستم چندکاربره شبکه و ابری بدون قفل‌شدن داده.',
+    adrRef: 'ADR-009',
+    techStack: ['Encrypted Ledger Snapshot', 'Migration Pipeline', 'Integrity Verifier'],
+    dependencies: ['m-801'],
+    assigneeRole: 'مهندس مهاجرت داده و QA',
+    progressPercent: 0
   }
 ];
 
@@ -874,6 +1060,14 @@ export function getStoredRoadmapMilestones(): Milestone[] {
             existingCustom.progressPercent = 100;
             updated = true;
           }
+        }
+
+        const missingInitialMilestones = INITIAL_ROADMAP_MILESTONES.filter(
+          initItem => !merged.some((m: Milestone) => m.id === initItem.id)
+        );
+        if (missingInitialMilestones.length > 0) {
+          merged = [...merged, ...missingInitialMilestones];
+          updated = true;
         }
 
         if (updated) {
@@ -943,14 +1137,13 @@ export function getStoredADRs(): ArchitectureDecisionRecord[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const hasAdr6 = parsed.some((a: ArchitectureDecisionRecord) => a.code === 'ADR-006');
-        if (!hasAdr6) {
-          const adr6 = INITIAL_ADRS.find(a => a.code === 'ADR-006');
-          if (adr6) {
-            const merged = [...parsed, adr6];
-            saveStoredADRs(merged);
-            return merged;
-          }
+        const missingAdrs = INITIAL_ADRS.filter(
+          initAdr => !parsed.some((a: ArchitectureDecisionRecord) => a.code === initAdr.code)
+        );
+        if (missingAdrs.length > 0) {
+          const merged = [...parsed, ...missingAdrs];
+          saveStoredADRs(merged);
+          return merged;
         }
         return parsed;
       }

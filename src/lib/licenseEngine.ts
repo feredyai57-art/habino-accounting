@@ -31,7 +31,8 @@ export const ADDON_CODES: Record<string, string> = {
   'ai_sales_agent': 'SLS',
   'financial_parser': 'OCR',
   'basket_optimizer': 'BSK',
-  'multiagent_orchestrator': 'AGNT'
+  'multiagent_orchestrator': 'AGNT',
+  'addon_geo_mapping': 'GEO'
 };
 
 /**

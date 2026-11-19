@@ -41,6 +41,8 @@ import { SecuritySettingsTab } from './settings/SecuritySettingsTab';
 import { TutorialsTab } from './settings/TutorialsTab';
 import { TenantPosDeviceSurvey } from './PosDeviceSurvey';
 import SupportMessagingCenter from './SupportMessagingCenter';
+import { collectSanitizedDiagnosticsBundle, formatDiagnosticBundleForSupport } from '../lib/clientDiagnosticsBundle';
+import { OnlineAddressMapPicker } from './common/OnlineAddressMapPicker';
 
 export interface SettingsProps {
   onClose?: () => void;
@@ -49,6 +51,10 @@ export interface SettingsProps {
 export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   const { settings, updateSettings, setCurrency, license, triggerManualBackup, isSupabaseLive, activeTenant, currentUser, auditLogs } = useAccounting();
   const isSuperAdmin = currentUser?.role === 'super_admin';
+  const [isUpdatingSupportAccess, setIsUpdatingSupportAccess] = useState(false);
+  const [supportAccessFeedback, setSupportAccessFeedback] = useState<string | null>(null);
+  const [diagnosticReportFeedback, setDiagnosticReportFeedback] = useState<string | null>(null);
+  const [isPreparingDiagnosticReport, setIsPreparingDiagnosticReport] = useState(false);
 
   const isDirtyRef = useRef(false);
   const [name, setName] = useState(settings.name);
@@ -57,6 +63,9 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   const [phone, setPhone] = useState(settings.phone);
   const [economicCode, setEconomicCode] = useState(settings.economicCode || '');
   const [address, setAddress] = useState(settings.address);
+  const [postalCode, setPostalCode] = useState(settings.postalCode || '');
+  const [latitude, setLatitude] = useState<number | undefined>(settings.lat ?? settings.latitude);
+  const [longitude, setLongitude] = useState<number | undefined>(settings.lng ?? settings.longitude);
   const [currency, setCurr] = useState<CurrencyType>(settings.currency);
   const [enableVat, setEnableVat] = useState<boolean>(
     settings.defaultInvoiceDesign?.showTaxColumn ?? (settings.defaultTaxRate > 0)
@@ -77,6 +86,9 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       setPhone(settings.phone || '');
       setEconomicCode(settings.economicCode || '');
       setAddress(settings.address || '');
+      setPostalCode(settings.postalCode || '');
+      setLatitude(settings.lat ?? settings.latitude);
+      setLongitude(settings.lng ?? settings.longitude);
       setCurr(settings.currency || 'IRT');
       setEnableVat(settings.defaultInvoiceDesign?.showTaxColumn ?? (settings.defaultTaxRate > 0));
       setDefaultTaxRate(settings.defaultTaxRate || 10);
@@ -167,6 +179,35 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     showPreviousBalance: true,
     notesTitle: 'توضیحات:',
     signatureSignerTitle: 'مهر و امضای مجاز صادرکننده'
+  };
+
+  const supportAccessActive = settings.allowSupportReadOnlyAccess === true &&
+    !!settings.supportAccessGrantedUntil &&
+    new Date(settings.supportAccessGrantedUntil).getTime() > Date.now();
+
+  const handleSupportAccessChange = async (enable: boolean) => {
+    if (currentUser?.role !== 'tenant_owner' || isUpdatingSupportAccess) return;
+    setIsUpdatingSupportAccess(true);
+    setSupportAccessFeedback(null);
+    try {
+      const result = await updateSettings({
+        allowSupportReadOnlyAccess: enable,
+        supportAccessGrantedUntil: enable
+          ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+          : undefined
+      });
+      if (!result.success) throw new Error(result.message);
+      if (!result.savedInCloud) {
+        throw new Error('مجوز فقط در این دستگاه ذخیره شد؛ برای ثبت امن رضایت پشتیبانی، اتصال ابری را بررسی و دوباره تلاش کنید.');
+      }
+      setSupportAccessFeedback(enable
+        ? 'دسترسی فقط‌خواندنی پشتیبانی برای ۲۴ ساعت فعال شد.'
+        : 'دسترسی پشتیبانی لغو شد.');
+    } catch (error) {
+      setSupportAccessFeedback(error instanceof Error ? error.message : 'به‌روزرسانی دسترسی پشتیبانی ناموفق بود.');
+    } finally {
+      setIsUpdatingSupportAccess(false);
+    }
   };
 
   const sqlScript = `-- ==============================================================================
@@ -314,6 +355,11 @@ CREATE INDEX IF NOT EXISTS idx_accounting_entries_tenant ON public.accounting_en
         phone: phone.trim(),
         economicCode: economicCode.trim(),
         address: address.trim(),
+        postalCode: postalCode.trim() || undefined,
+        lat: latitude,
+        lng: longitude,
+        latitude,
+        longitude,
         currency,
         defaultTaxRate: enableVat ? (Number(defaultTaxRate) || 10) : 0,
         defaultInvoiceDesign: updatedDesign,
@@ -601,7 +647,33 @@ CREATE INDEX IF NOT EXISTS idx_accounting_entries_tenant ON public.accounting_en
         </button>
       </div>
 
-      {activeTab === 'security' && <SecuritySettingsTab />}
+      {activeTab === 'security' && (
+        <div className="space-y-4">
+          {currentUser?.role === 'tenant_owner' && (
+            <section className="rounded-2xl border border-sky-200 bg-sky-50 p-4" dir="rtl">
+              <h3 className="font-bold text-sky-950">دسترسی موقت پشتیبانی هابینو</h3>
+              <p className="mt-1 text-xs leading-6 text-sky-900">
+                با فعال‌سازی، کارشناس پشتیبانی تا ۲۴ ساعت امکان مشاهدهٔ فقط‌خواندنی فضای کاری را خواهد داشت. این مجوز هر زمان قابل لغو است.
+              </p>
+              {supportAccessFeedback && <p role="status" className="mt-2 text-xs font-semibold text-sky-900">{supportAccessFeedback}</p>}
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${supportAccessActive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}`}>
+                  {supportAccessActive ? `مجاز تا ${new Date(settings.supportAccessGrantedUntil!).toLocaleString('fa-IR')}` : 'غیرفعال'}
+                </span>
+                <button
+                  type="button"
+                  disabled={isUpdatingSupportAccess}
+                  onClick={() => void handleSupportAccessChange(!supportAccessActive)}
+                  className={`rounded-xl px-4 py-2 text-xs font-bold text-white disabled:opacity-50 ${supportAccessActive ? 'bg-rose-600 hover:bg-rose-700' : 'bg-sky-700 hover:bg-sky-800'}`}
+                >
+                  {isUpdatingSupportAccess ? 'در حال ذخیره...' : supportAccessActive ? 'لغو مجوز' : 'فعال‌سازی ۲۴ ساعته'}
+                </button>
+              </div>
+            </section>
+          )}
+          <SecuritySettingsTab />
+        </div>
+      )}
 
       {activeTab === 'tutorials' && <TutorialsTab />}
 
@@ -610,7 +682,43 @@ CREATE INDEX IF NOT EXISTS idx_accounting_entries_tenant ON public.accounting_en
       )}
 
       {activeTab === 'support' && !isSuperAdmin && currentUser?.role !== 'hubino_support' && activeTenant?.id !== 'all' && (
-        <SupportMessagingCenter mode="tenant" />
+        <div className="space-y-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4" dir="rtl">
+            <h3 className="font-bold text-slate-900">گزارش فنی بدون داده مالی</h3>
+            <p className="mt-1 text-xs leading-6 text-slate-600">فقط اطلاعات فنی و وضعیت صف آفلاین تهیه می‌شود؛ محتوای سند، مبالغ و اطلاعات طرف‌حساب‌ها در گزارش قرار نمی‌گیرد.</p>
+            {diagnosticReportFeedback && <p role="status" className="mt-2 text-xs text-slate-700">{diagnosticReportFeedback}</p>}
+            <button
+              type="button"
+              disabled={isPreparingDiagnosticReport}
+              onClick={async () => {
+                setIsPreparingDiagnosticReport(true);
+                setDiagnosticReportFeedback(null);
+                try {
+                  const bundle = await collectSanitizedDiagnosticsBundle(activeTenant.id);
+                  const report = formatDiagnosticBundleForSupport(bundle);
+                  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const anchor = document.createElement('a');
+                  anchor.href = url;
+                  anchor.download = `habino-diagnostics-${Date.now()}.json`;
+                  anchor.click();
+                  URL.revokeObjectURL(url);
+                  await navigator.clipboard?.writeText(report);
+                  setDiagnosticReportFeedback('گزارش JSON بارگیری شد و خلاصهٔ فارسی در صورت پشتیبانی مرورگر کپی شد.');
+                } catch (error) {
+                  setDiagnosticReportFeedback(error instanceof Error ? error.message : 'تهیهٔ گزارش فنی ناموفق بود.');
+                } finally {
+                  setIsPreparingDiagnosticReport(false);
+                }
+              }}
+              className="mt-3 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
+            >
+              <Download className="h-4 w-4" />
+              {isPreparingDiagnosticReport ? 'در حال تهیه گزارش...' : 'کپی/دانلود گزارش فنی بدون داده مالی'}
+            </button>
+          </section>
+          <SupportMessagingCenter mode="tenant" />
+        </div>
       )}
 
       {/* Tenant Audit Logs - visible to all users in their own workspace */}
@@ -976,9 +1084,35 @@ CREATE INDEX IF NOT EXISTS idx_accounting_entries_tenant ON public.accounting_en
             <textarea
               rows={2}
               value={address}
-              onChange={e => setAddress(e.target.value)}
+              onChange={e => {
+                isDirtyRef.current = true;
+                setAddress(e.target.value);
+              }}
               placeholder="تهران، خیابان ولیعصر، برج فناوری..."
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-xs"
+            />
+            <OnlineAddressMapPicker
+              value={address}
+              postalCode={postalCode}
+              lat={latitude}
+              lng={longitude}
+              onSelectAddress={payload => {
+                isDirtyRef.current = true;
+                setAddress(payload.address);
+                setPostalCode(payload.postalCode || '');
+                setLatitude(payload.lat);
+                setLongitude(payload.lng);
+              }}
+            />
+            <input
+              type="text"
+              value={postalCode}
+              onChange={event => {
+                isDirtyRef.current = true;
+                setPostalCode(event.target.value);
+              }}
+              placeholder="کد پستی (اختیاری)"
+              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs focus:bg-white"
             />
           </div>
 

@@ -118,10 +118,670 @@ const systemAuditActions = new Set([
   'SUPABASE_PULL_FAILED',
   'SUPABASE_PUSH_REQUESTED',
   'SUPABASE_PUSH_COMPLETED',
-  'SUPABASE_PUSH_FAILED'
+  'SUPABASE_PUSH_FAILED',
+  'SUPER_ADMIN_ROLE_CHANGED'
 ]);
 const systemAuditRateLimits = new Map<string, { windowStartedAt: number; count: number }>();
 const supportAssistantRateLimits = new Map<string, { windowStartedAt: number; count: number }>();
+const aiUserRateLimits = new Map<string, { windowStartedAt: number; count: number }>();
+const aiOfflineIpRateLimits = new Map<string, { windowStartedAt: number; count: number }>();
+const mapUserRateLimits = new Map<string, { windowStartedAt: number; count: number }>();
+const mapMonthlyUsage = new Map<string, { period: string; count: number }>();
+const MAP_CACHE_TTL_MS = 30 * 60_000;
+const MAP_CACHE_MAX_ENTRIES = 3000;
+const mapResponseCache = new Map<string, { expiresAt: number; response: unknown }>();
+
+const getMapCachedResponse = (key: string): unknown | undefined => {
+  const cached = mapResponseCache.get(key);
+  if (!cached) return undefined;
+  if (cached.expiresAt <= Date.now()) {
+    mapResponseCache.delete(key);
+    return undefined;
+  }
+  mapResponseCache.delete(key);
+  mapResponseCache.set(key, cached);
+  return cached.response;
+};
+
+const setMapCachedResponse = (key: string, response: unknown): void => {
+  mapResponseCache.delete(key);
+  mapResponseCache.set(key, { expiresAt: Date.now() + MAP_CACHE_TTL_MS, response });
+  while (mapResponseCache.size > MAP_CACHE_MAX_ENTRIES) {
+    const oldestKey = mapResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    mapResponseCache.delete(oldestKey);
+  }
+};
+
+const consumeMapMonthlyQuota = (tenantId: string): boolean => {
+  const period = new Date().toISOString().slice(0, 7);
+  const configuredLimit = process.env.MAP_MONTHLY_QUOTA_PER_TENANT === undefined
+    ? 2500
+    : Number(process.env.MAP_MONTHLY_QUOTA_PER_TENANT);
+  const limit = Number.isSafeInteger(configuredLimit) && configuredLimit >= 0 ? configuredLimit : 2500;
+  for (const [key, usage] of mapMonthlyUsage) {
+    if (usage.period !== period) mapMonthlyUsage.delete(key);
+  }
+  const usage = mapMonthlyUsage.get(tenantId);
+  if ((usage?.count || 0) >= limit) return false;
+  mapMonthlyUsage.set(tenantId, { period, count: (usage?.count || 0) + 1 });
+  return true;
+};
+
+interface GoogleGeocodeComponent {
+  long_name?: string;
+  types?: string[];
+}
+
+interface NeshanSearchItem {
+  poiHash?: string;
+  title?: string;
+  address?: string;
+  region?: string;
+  location?: { x?: number; y?: number };
+}
+
+interface GooglePlaceSearchResult {
+  id?: string;
+  displayName?: { text?: string };
+  formattedAddress?: string;
+  location?: { latitude?: number; longitude?: number };
+}
+
+interface NominatimAddressDetails {
+  state?: string;
+  province?: string;
+  city?: string;
+  town?: string;
+  village?: string;
+  county?: string;
+  neighbourhood?: string;
+  suburb?: string;
+  quarter?: string;
+  postcode?: string;
+}
+
+interface NominatimPlaceResult {
+  place_id?: number;
+  name?: string;
+  display_name?: string;
+  lat?: string;
+  lon?: string;
+  address?: NominatimAddressDetails;
+}
+
+const NOMINATIM_USER_AGENT = 'HabinoAccounting/1.0 (https://habino.ir; support@habino.app)';
+let lastNominatimCallAt = 0;
+let nominatimQueue: Promise<void> = Promise.resolve();
+
+const waitForNominatimSlot = async (): Promise<void> => {
+  const prev = nominatimQueue;
+  let release!: () => void;
+  nominatimQueue = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  await prev;
+  try {
+    const elapsed = Date.now() - lastNominatimCallAt;
+    if (elapsed < 1050) {
+      await new Promise(resolve => setTimeout(resolve, 1050 - elapsed));
+    }
+    lastNominatimCallAt = Date.now();
+  } finally {
+    release();
+  }
+};
+
+const consumeAiRateLimit = (
+  rateLimits: Map<string, { windowStartedAt: number; count: number }>,
+  key: string,
+  maxRequests: number
+): boolean => {
+  const now = Date.now();
+  const currentLimit = rateLimits.get(key);
+  if (currentLimit && now - currentLimit.windowStartedAt < 60_000) {
+    if (currentLimit.count >= maxRequests) return false;
+    currentLimit.count += 1;
+  } else {
+    rateLimits.set(key, { windowStartedAt: now, count: 1 });
+  }
+
+  if (rateLimits.size > 2000) {
+    for (const [rateLimitKey, entry] of rateLimits) {
+      if (now - entry.windowStartedAt >= 60_000) rateLimits.delete(rateLimitKey);
+    }
+    if (rateLimits.size > 2000) {
+      const oldestKey = rateLimits.keys().next().value;
+      if (oldestKey) rateLimits.delete(oldestKey);
+    }
+  }
+  return true;
+};
+
+interface AiRequestAuth {
+  userId: string;
+  role: string | null;
+  authenticated: boolean;
+}
+
+const requireAuthenticatedAiUser = async (
+  req: Request,
+  res: Response
+): Promise<AiRequestAuth | null> => {
+  const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const anonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim();
+  const hasSupabaseConfig = Boolean(supabaseUrl && anonKey);
+  const peerIp = req.socket.remoteAddress || 'unknown';
+  const isLoopback = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peerIp);
+  const isDevelopment = process.env.NODE_ENV === 'development' ||
+    (process.env.NODE_ENV !== 'production' && isLoopback);
+  const authorization = req.headers.authorization || '';
+  const accessToken = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+
+  if (!hasSupabaseConfig && isDevelopment) {
+    if (!consumeAiRateLimit(aiOfflineIpRateLimits, peerIp, 6)) {
+      res.status(429).json({ success: false, error: 'درخواست‌های آفلاین هوش مصنوعی بیش از حد مجاز است.' });
+      return null;
+    }
+    return { userId: `dev:${peerIp}`, role: null, authenticated: false };
+  }
+
+  if (!accessToken || accessToken.length > 8192) {
+    res.status(401).json({ success: false, error: 'برای استفاده از سرویس هوش مصنوعی، نشست معتبر الزامی است.' });
+    return null;
+  }
+  if (!hasSupabaseConfig) {
+    res.status(503).json({ success: false, error: 'احراز هویت سرویس هوش مصنوعی در سرور پیکربندی نشده است.' });
+    return null;
+  }
+
+  try {
+    const trustedUrl = new URL(supabaseUrl);
+    if (trustedUrl.protocol !== 'https:' && trustedUrl.hostname !== 'localhost' && trustedUrl.hostname !== '127.0.0.1') {
+      res.status(503).json({ success: false, error: 'نشانی امن سرویس احراز هویت پیکربندی نشده است.' });
+      return null;
+    }
+
+    const authClient = createClient(trustedUrl.origin, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+    });
+    const { data, error } = await authClient.auth.getUser(accessToken);
+    if (error || !data.user) {
+      res.status(401).json({ success: false, error: 'نشست ورود معتبر نیست یا منقضی شده است.' });
+      return null;
+    }
+    if (!consumeAiRateLimit(aiUserRateLimits, data.user.id, 20)) {
+      res.status(429).json({ success: false, error: 'تعداد درخواست‌های هوش مصنوعی در این بازه بیش از حد مجاز است.' });
+      return null;
+    }
+
+    const role = data.user.app_metadata?.role;
+    return {
+      userId: data.user.id,
+      role: typeof role === 'string' ? role : null,
+      authenticated: true
+    };
+  } catch (error) {
+    console.error('[AI Auth] Failed to validate Supabase session:', error instanceof Error ? error.message : String(error));
+    res.status(503).json({ success: false, error: 'بررسی نشست سرویس هوش مصنوعی موقتاً ناموفق بود.' });
+    return null;
+  }
+};
+
+interface MapRequestContext {
+  tenantId: string;
+}
+
+const authenticateMapRequest = async (req: Request, res: Response): Promise<MapRequestContext | null> => {
+  const authorization = req.headers.authorization || '';
+  const accessToken = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+  if (!accessToken || accessToken.length > 8192) {
+    res.status(401).json({ error: 'برای استفاده از نقشه، نشست معتبر الزامی است.' });
+    return null;
+  }
+
+  const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const anonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim();
+  if (!supabaseUrl || !anonKey) {
+    res.status(503).json({ error: 'سرویس احراز هویت نقشه در سرور پیکربندی نشده است.' });
+    return null;
+  }
+
+  const trustedUrl = new URL(supabaseUrl);
+  if (trustedUrl.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(trustedUrl.hostname)) {
+    res.status(503).json({ error: 'نشانی امن سرویس احراز هویت پیکربندی نشده است.' });
+    return null;
+  }
+  const authClient = createClient(trustedUrl.origin, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+  });
+  const { data, error } = await authClient.auth.getUser(accessToken);
+  if (error || !data.user) {
+    res.status(401).json({ error: 'نشست ورود معتبر نیست یا منقضی شده است.' });
+    return null;
+  }
+
+  const role = data.user.app_metadata?.role;
+  const claimedTenantId = data.user.app_metadata?.tenant_id;
+  const requestedTenantId = typeof req.query.tenantId === 'string' ? req.query.tenantId.trim() : '';
+  const tenantId = role === 'super_admin' && requestedTenantId
+    ? requestedTenantId
+    : typeof claimedTenantId === 'string' ? claimedTenantId : '';
+  if (
+    !tenantId ||
+    !/^[A-Za-z0-9_-]{1,100}$/.test(tenantId) ||
+    (requestedTenantId && requestedTenantId !== tenantId)
+  ) {
+    res.status(403).json({ error: 'فضای کاری درخواست‌شده با نشست معتبر شما مطابقت ندارد.' });
+    return null;
+  }
+  if (!consumeAiRateLimit(mapUserRateLimits, tenantId, 30)) {
+    res.status(429).json({ available: false, reason: 'MAP_RATE_LIMIT_EXCEEDED' });
+    return null;
+  }
+
+  if (process.env.NODE_ENV === 'production' && supabaseUrl && anonKey) {
+    const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+    if (!serviceRoleKey) {
+      res.status(503).json({ available: false, reason: 'MAP_ENTITLEMENT_UNAVAILABLE' });
+      return null;
+    }
+
+    try {
+      const serviceClient = createClient(trustedUrl.origin, serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+      });
+      if (role !== 'super_admin') {
+        const { data: member, error: memberError } = await serviceClient
+          .from('tenant_users')
+          .select('status')
+          .eq('tenant_id', tenantId)
+          .eq('id', data.user.id)
+          .maybeSingle();
+        if (memberError) throw memberError;
+        if (!member || member.status !== 'active') {
+          res.status(403).json({ error: 'دسترسی فعال به این فضای کاری ندارید.' });
+          return null;
+        }
+      }
+
+      const { data: tenant, error: tenantError } = await serviceClient
+        .from('tenants')
+        .select('*')
+        .eq('id', tenantId)
+        .maybeSingle();
+      if (tenantError) throw tenantError;
+      if (!tenant || tenant.status !== 'active') {
+        res.status(403).json({ error: 'فضای کاری فعال پیدا نشد.' });
+        return null;
+      }
+
+      const metadata = tenant.metadata && typeof tenant.metadata === 'object' ? tenant.metadata : {};
+      const subscription = metadata.subscription && typeof metadata.subscription === 'object'
+        ? metadata.subscription
+        : tenant.subscription && typeof tenant.subscription === 'object'
+          ? tenant.subscription
+          : {};
+      const expiresAt = typeof subscription.expiresAt === 'string'
+        ? subscription.expiresAt
+        : typeof subscription.expires_at === 'string'
+          ? subscription.expires_at
+          : '';
+      const expiryIsValid = !expiresAt || (Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) > Date.now());
+      const planStatus = subscription.status || tenant.subscription_status;
+      const enterpriseActive = (subscription.plan || tenant.plan) === 'enterprise' &&
+        planStatus === 'active' && expiryIsValid;
+      const activeAddons = [
+        tenant.active_addons,
+        metadata.active_addons,
+        metadata.activeAddons,
+        subscription.active_addons,
+        subscription.activeAddons
+      ].flatMap(value => Array.isArray(value) ? value : []);
+      if (!enterpriseActive && !activeAddons.includes('addon_geo_mapping')) {
+        res.status(403).json({
+          available: false,
+          reason: 'ADDON_REQUIRED',
+          addonId: 'addon_geo_mapping'
+        });
+        return null;
+      }
+    } catch (entitlementError) {
+      console.error('[Maps] Tenant entitlement check failed:', entitlementError instanceof Error ? entitlementError.message : String(entitlementError));
+      res.status(503).json({ available: false, reason: 'MAP_ENTITLEMENT_UNAVAILABLE' });
+      return null;
+    }
+  }
+  return { tenantId };
+};
+
+app.get('/api/maps/reverse-geocode', async (req: Request, res: Response) => {
+  try {
+    const mapContext = await authenticateMapRequest(req, res);
+    if (!mapContext) return;
+
+    const country = typeof req.query.country === 'string' ? req.query.country.trim().toUpperCase() : 'IR';
+    const language = typeof req.query.lang === 'string' && /^[a-zA-Z-]{2,10}$/.test(req.query.lang)
+      ? req.query.lang
+      : 'fa';
+    const latitude = Number(req.query.lat);
+    const longitude = Number(req.query.lng);
+    if (
+      !/^[A-Z]{2}$/.test(country) ||
+      !Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
+      !Number.isFinite(longitude) || longitude < -180 || longitude > 180
+    ) {
+      return res.status(400).json({ error: 'مختصات یا کشور انتخاب‌شده معتبر نیست.' });
+    }
+
+    const roundedLatitude = Number(latitude.toFixed(4));
+    const roundedLongitude = Number(longitude.toFixed(4));
+    const cacheKey = JSON.stringify([
+      'reverse',
+      mapContext.tenantId,
+      country,
+      language,
+      roundedLatitude,
+      roundedLongitude
+    ]);
+    const cachedResponse = getMapCachedResponse(cacheKey);
+    if (cachedResponse !== undefined) return res.json(cachedResponse);
+
+    const neshanKey = (process.env.NESHAN_SERVICE_API_KEY || '').trim();
+    if (country === 'IR' && neshanKey) {
+      if (!consumeMapMonthlyQuota(mapContext.tenantId)) {
+        return res.status(429).json({ available: false, reason: 'MAP_QUOTA_EXCEEDED' });
+      }
+
+      const url = new URL('https://api.neshan.org/v5/reverse');
+      url.searchParams.set('lat', String(roundedLatitude));
+      url.searchParams.set('lng', String(roundedLongitude));
+      const response = await fetch(url, {
+        headers: { 'Api-Key': neshanKey },
+        signal: AbortSignal.timeout(10_000)
+      });
+      if (!response.ok) {
+        console.error('[Maps] Neshan reverse geocoding failed:', response.status);
+        return res.status(502).json({ error: 'تبدیل مختصات به نشانی ناموفق بود.' });
+      }
+      const result = await response.json() as {
+        formatted_address?: string;
+        state?: string;
+        city?: string;
+        village?: string;
+        neighbourhood?: string;
+        postal_code?: string;
+      };
+      const responseBody = {
+        available: true,
+        provider: 'neshan',
+        formattedAddress: result.formatted_address || '',
+        province: result.state || '',
+        city: result.city || result.village || '',
+        neighbourhood: result.neighbourhood || '',
+        postalCode: result.postal_code || '',
+        lat: roundedLatitude,
+        lng: roundedLongitude
+      };
+      setMapCachedResponse(cacheKey, responseBody);
+      return res.json(responseBody);
+    }
+
+    const googleServerKey = (process.env.GOOGLE_MAPS_SERVER_API_KEY || '').trim();
+    if (country !== 'IR' && googleServerKey) {
+      if (!consumeMapMonthlyQuota(mapContext.tenantId)) {
+        return res.status(429).json({ available: false, reason: 'MAP_QUOTA_EXCEEDED' });
+      }
+      const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+      url.searchParams.set('latlng', `${roundedLatitude},${roundedLongitude}`);
+      url.searchParams.set('language', language);
+      url.searchParams.set('region', country.toLowerCase());
+      url.searchParams.set('key', googleServerKey);
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) {
+        console.error('[Maps] Google reverse geocoding failed:', response.status);
+        return res.status(502).json({ error: 'تبدیل مختصات به نشانی ناموفق بود.' });
+      }
+      const result = await response.json() as {
+        status?: string;
+        results?: Array<{ formatted_address?: string; address_components?: GoogleGeocodeComponent[] }>;
+      };
+      if (result.status !== 'OK' && result.status !== 'ZERO_RESULTS') {
+        console.error('[Maps] Google reverse geocoding returned:', result.status || 'unknown');
+        return res.status(502).json({ error: 'تبدیل مختصات به نشانی ناموفق بود.' });
+      }
+      const components = result.results?.[0]?.address_components || [];
+      const getComponent = (types: string[]) =>
+        components.find(component => component.types?.some(type => types.includes(type)))?.long_name || '';
+      const responseBody = {
+        available: true,
+        provider: 'google',
+        formattedAddress: result.results?.[0]?.formatted_address || '',
+        province: getComponent(['administrative_area_level_1']),
+        city: getComponent(['locality', 'postal_town', 'administrative_area_level_2']),
+        neighbourhood: getComponent(['neighborhood', 'sublocality', 'sublocality_level_1']),
+        postalCode: getComponent(['postal_code']),
+        lat: roundedLatitude,
+        lng: roundedLongitude
+      };
+      setMapCachedResponse(cacheKey, responseBody);
+      return res.json(responseBody);
+    }
+
+    // Zero-key OpenStreetMap Nominatim fallback when commercial keys are absent
+    if (!consumeMapMonthlyQuota(mapContext.tenantId)) {
+      return res.status(429).json({ available: false, reason: 'MAP_QUOTA_EXCEEDED' });
+    }
+    await waitForNominatimSlot();
+    const osmUrl = new URL('https://nominatim.openstreetmap.org/reverse');
+    osmUrl.searchParams.set('format', 'jsonv2');
+    osmUrl.searchParams.set('lat', String(roundedLatitude));
+    osmUrl.searchParams.set('lon', String(roundedLongitude));
+    osmUrl.searchParams.set('accept-language', language);
+    osmUrl.searchParams.set('addressdetails', '1');
+    const osmResponse = await fetch(osmUrl, {
+      headers: { 'User-Agent': NOMINATIM_USER_AGENT, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (!osmResponse.ok) {
+      console.error('[Maps] Nominatim reverse geocoding failed:', osmResponse.status);
+      return res.status(502).json({ error: 'تبدیل مختصات به نشانی در سرویس آزاد نقشه ناموفق بود.' });
+    }
+    const osmResult = await osmResponse.json() as NominatimPlaceResult;
+    const addr = osmResult.address || {};
+    const responseBody = {
+      available: true,
+      provider: 'osm',
+      formattedAddress: osmResult.display_name || '',
+      province: addr.state || addr.province || '',
+      city: addr.city || addr.town || addr.village || addr.county || '',
+      neighbourhood: addr.neighbourhood || addr.suburb || addr.quarter || '',
+      postalCode: addr.postcode || '',
+      lat: roundedLatitude,
+      lng: roundedLongitude
+    };
+    setMapCachedResponse(cacheKey, responseBody);
+    return res.json(responseBody);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('[Maps] Reverse geocoding request failed:', detail);
+    return res.status(502).json({ error: 'ارتباط با سرویس نقشه ناموفق بود.' });
+  }
+});
+
+app.get('/api/maps/search', async (req: Request, res: Response) => {
+  try {
+    const mapContext = await authenticateMapRequest(req, res);
+    if (!mapContext) return;
+
+    const query = typeof req.query.q === 'string' ? req.query.q.trim().replace(/\s+/g, ' ') : '';
+    const country = typeof req.query.country === 'string' ? req.query.country.trim().toUpperCase() : 'IR';
+    const language = typeof req.query.lang === 'string' && /^[a-zA-Z-]{2,10}$/.test(req.query.lang)
+      ? req.query.lang
+      : 'fa';
+    const hasLatitude = req.query.lat !== undefined;
+    const hasLongitude = req.query.lng !== undefined;
+    const latitudeText = typeof req.query.lat === 'string' ? req.query.lat.trim() : '';
+    const longitudeText = typeof req.query.lng === 'string' ? req.query.lng.trim() : '';
+    const latitude = latitudeText ? Number(latitudeText) : undefined;
+    const longitude = longitudeText ? Number(longitudeText) : undefined;
+    if (
+      query.length < 2 || query.length > 200 || !/^[A-Z]{2}$/.test(country) ||
+      hasLatitude !== hasLongitude ||
+      (hasLatitude && (!latitudeText || !longitudeText)) ||
+      (latitude !== undefined && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90)) ||
+      (longitude !== undefined && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))
+    ) {
+      return res.status(400).json({ error: 'عبارت جستجو، کشور یا مختصات معتبر نیست.' });
+    }
+
+    const roundedLatitude = latitude === undefined ? undefined : Number(latitude.toFixed(4));
+    const roundedLongitude = longitude === undefined ? undefined : Number(longitude.toFixed(4));
+    const cacheKey = JSON.stringify([
+      'search',
+      mapContext.tenantId,
+      country,
+      language,
+      query.toLocaleLowerCase(),
+      roundedLatitude ?? null,
+      roundedLongitude ?? null
+    ]);
+    const cachedResponse = getMapCachedResponse(cacheKey);
+    if (cachedResponse !== undefined) return res.json(cachedResponse);
+
+    const neshanKey = (process.env.NESHAN_SERVICE_API_KEY || '').trim();
+    if (country === 'IR' && neshanKey) {
+      if (!consumeMapMonthlyQuota(mapContext.tenantId)) {
+        return res.status(429).json({ available: false, reason: 'MAP_QUOTA_EXCEEDED' });
+      }
+      const center = {
+        latitude: roundedLatitude ?? 35.6892,
+        longitude: roundedLongitude ?? 51.389
+      };
+      const url = new URL('https://api.neshan.org/v3/search');
+      url.searchParams.set('q', JSON.stringify({ term: query, center }));
+      const response = await fetch(url, {
+        headers: { 'Api-Key': neshanKey },
+        signal: AbortSignal.timeout(10_000)
+      });
+      if (!response.ok) {
+        console.error('[Maps] Neshan search failed:', response.status);
+        return res.status(502).json({ error: 'جستجوی مکان در سرویس نقشه ناموفق بود.' });
+      }
+      const result = await response.json() as { items?: NeshanSearchItem[] };
+      const items = (result.items || []).flatMap((item, index) => {
+        const lat = Number(item.location?.y);
+        const lng = Number(item.location?.x);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+        return [{
+          id: item.poiHash || `${lat}-${lng}-${index}`,
+          title: item.title || item.address || '',
+          address: item.address || item.region || item.title || '',
+          lat,
+          lng
+        }];
+      });
+      const responseBody = { available: true, provider: 'neshan', items };
+      setMapCachedResponse(cacheKey, responseBody);
+      return res.json(responseBody);
+    }
+
+    const googleServerKey = (process.env.GOOGLE_MAPS_SERVER_API_KEY || '').trim();
+    if (country !== 'IR' && googleServerKey) {
+      if (!consumeMapMonthlyQuota(mapContext.tenantId)) {
+        return res.status(429).json({ available: false, reason: 'MAP_QUOTA_EXCEEDED' });
+      }
+      const body: Record<string, unknown> = {
+        textQuery: query,
+        languageCode: language,
+        regionCode: country,
+        includedRegionCodes: [country]
+      };
+      if (roundedLatitude !== undefined && roundedLongitude !== undefined) {
+        body.locationBias = {
+          circle: {
+            center: { latitude: roundedLatitude, longitude: roundedLongitude },
+            radius: 50_000
+          }
+        };
+      }
+      const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': googleServerKey,
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location'
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10_000)
+      });
+      if (!response.ok) {
+        console.error('[Maps] Google Places search failed:', response.status);
+        return res.status(502).json({ error: 'جستجوی مکان در سرویس نقشه ناموفق بود.' });
+      }
+      const result = await response.json() as { places?: GooglePlaceSearchResult[] };
+      const items = (result.places || []).flatMap((place, index) => {
+        const lat = Number(place.location?.latitude);
+        const lng = Number(place.location?.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+        const title = place.displayName?.text || place.formattedAddress || '';
+        return [{
+          id: place.id || `${lat}-${lng}-${index}`,
+          title,
+          address: place.formattedAddress || title,
+          lat,
+          lng
+        }];
+      });
+      const responseBody = { available: true, provider: 'google', items };
+      setMapCachedResponse(cacheKey, responseBody);
+      return res.json(responseBody);
+    }
+
+    // Zero-key OpenStreetMap Nominatim search fallback when commercial keys are absent
+    if (!consumeMapMonthlyQuota(mapContext.tenantId)) {
+      return res.status(429).json({ available: false, reason: 'MAP_QUOTA_EXCEEDED' });
+    }
+    await waitForNominatimSlot();
+    const osmSearchUrl = new URL('https://nominatim.openstreetmap.org/search');
+    osmSearchUrl.searchParams.set('format', 'jsonv2');
+    osmSearchUrl.searchParams.set('q', query);
+    osmSearchUrl.searchParams.set('limit', '8');
+    osmSearchUrl.searchParams.set('accept-language', language);
+    osmSearchUrl.searchParams.set('addressdetails', '1');
+    osmSearchUrl.searchParams.set('countrycodes', country.toLowerCase());
+    const osmResponse = await fetch(osmSearchUrl, {
+      headers: { 'User-Agent': NOMINATIM_USER_AGENT, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (!osmResponse.ok) {
+      console.error('[Maps] Nominatim search failed:', osmResponse.status);
+      return res.status(502).json({ error: 'جستجوی مکان در سرویس آزاد نقشه ناموفق بود.' });
+    }
+    const osmResults = await osmResponse.json() as NominatimPlaceResult[];
+    const items = (Array.isArray(osmResults) ? osmResults : []).flatMap((place, index) => {
+      const lat = Number(place.lat);
+      const lng = Number(place.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+      const address = place.display_name || place.name || '';
+      const title = place.name || address.split(',')[0]?.trim() || address;
+      return [{
+        id: String(place.place_id ?? `${lat}-${lng}-${index}`),
+        title,
+        address,
+        lat,
+        lng
+      }];
+    });
+    const responseBody = { available: true, provider: 'osm', items };
+    setMapCachedResponse(cacheKey, responseBody);
+    return res.json(responseBody);
+  } catch (error) {
+    console.error('[Maps] Search request failed:', error instanceof Error ? error.message : String(error));
+    return res.status(502).json({ error: 'جستجوی مکان در سرویس نقشه ناموفق بود.' });
+  }
+});
+
 const allowSystemAuditRequest = (actorId: string): boolean => {
   const now = Date.now();
   const currentLimit = systemAuditRateLimits.get(actorId);
@@ -206,7 +866,11 @@ app.post('/api/system-audit/events', async (req: Request, res: Response) => {
       (resourceId !== null && (typeof resourceId !== 'string' || resourceId.length > 128)) ||
       (correlationId !== null && (typeof correlationId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(correlationId))) ||
       !['succeeded', 'failed', 'started', 'observed'].includes(outcome) ||
-      (reasonCode !== null && (typeof reasonCode !== 'string' || !/^[A-Z0-9_]{1,40}$/.test(reasonCode)))
+      (reasonCode !== null && (
+        typeof reasonCode !== 'string' ||
+        reasonCode.length > 240 ||
+        !/^[\p{L}\p{N}_ .،,:;()-]{1,240}$/u.test(reasonCode)
+      ))
     ) {
       return res.status(400).json({ success: false, error: 'جزئیات رویداد ممیزی معتبر نیست.' });
     }
@@ -1572,6 +2236,8 @@ app.post('/api/support/sender-profiles', async (req: Request, res: Response) => 
 
 // Dedicated Omni Route & OpenAI Chat Completions Endpoint
 app.post(['/api/ai/omni', '/api/openai/chat'], async (req: Request, res: Response) => {
+  if (!await requireAuthenticatedAiUser(req, res)) return;
+
   try {
     const { messages, model, temperature, maxTokens, responseFormatJson, stream } = req.body || {};
 
@@ -1613,8 +2279,8 @@ app.post(['/api/ai/omni', '/api/openai/chat'], async (req: Request, res: Respons
     // بازگشت به استدلالگر محلی سیناپس در صورت عدم دسترسی به کلاود
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     const fallbackText = HabinoSynapseReasoningEngine.generateVoiceResponse(lastUserMsg, {
-      userRole: 'super_admin',
-      voiceAuthStatus: 'authenticated'
+      userRole: 'tenant_owner',
+      voiceAuthStatus: 'locked'
     });
 
     return res.json({
@@ -3552,6 +4218,8 @@ app.post('/api/agents/supabase/audit', (req: Request, res: Response) => {
 
 // Gemini / OpenAI Omni Cashflow insights
 app.post('/api/gemini/cashflow-insights', async (req: Request, res: Response) => {
+  if (!await requireAuthenticatedAiUser(req, res)) return;
+
   try {
     const { summaryData } = req.body;
     const prompt = `شما دستیار مالی و تحلیلی هوشمند سیناپس برای هابینو حسابداری هستید.
@@ -3597,6 +4265,8 @@ app.post('/api/gemini/cashflow-insights', async (req: Request, res: Response) =>
 
 // Gemini / OpenAI Omni Transaction Categorization
 app.post('/api/gemini/categorize-transaction', async (req: Request, res: Response) => {
+  if (!await requireAuthenticatedAiUser(req, res)) return;
+
   try {
     const { description, amount, type } = req.body;
     const prompt = `دسته بندی مالی مناسب را برای این تراکنش تعیین کنید:
@@ -3622,22 +4292,35 @@ app.post('/api/gemini/categorize-transaction', async (req: Request, res: Respons
 
 // Gemini Voice Chat / SiraFlow AI Orchestrator with Real Voice Auth & OCR Pipeline Bridge
 app.post('/api/gemini/voice-synapse', async (req: Request, res: Response) => {
+  const aiAuth = await requireAuthenticatedAiUser(req, res);
+  if (!aiAuth) return;
+  const isFounder = aiAuth.role === 'super_admin';
+  const currentAuthStatus: 'locked' | 'authenticated' =
+    isFounder && req.body?.voiceAuthStatus === 'authenticated' ? 'authenticated' : 'locked';
+  const isSuperAdmin = isFounder && currentAuthStatus === 'authenticated';
+
   try {
     const { 
       message, 
       context = {}, 
-      voiceAuthStatus = 'locked', 
       lastDiscussedEntity = null, 
       pendingAction = null 
-    } = req.body;
+    } = req.body || {};
 
-    const trimmedMsg = (message || '').trim();
+    const trimmedMsg = typeof message === 'string' ? message.trim() : '';
     const isWakePhrase = /سیناپس[،\s]*مدیریت وارد شد|مدیریت وارد شد|من فرید تهرانی هستم|احراز هویت مدیریت/i.test(trimmedMsg);
 
-    // ۱. بررسی پروتکل احراز هویت صوتی و تعیین پرسونای حاکمیتی (Dual-Persona Governance)
-    let currentAuthStatus = voiceAuthStatus;
-    if (isWakePhrase || req.body.authenticate === true) {
-      currentAuthStatus = 'authenticated';
+    if ((isWakePhrase || req.body?.authenticate === true) && !isSuperAdmin) {
+      return res.status(403).json({
+        reply: 'فعال‌سازی دسترسی حاکمیتی فقط با نشست معتبر بنیان‌گذار و وضعیت احراز هویت صوتی مجاز است.',
+        agent: 'siraflow',
+        voiceAuthStatus: 'locked',
+        isSuperAdmin: false,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (isWakePhrase || req.body?.authenticate === true) {
       return res.json({
         reply: 'درود مهندس فرید تهرانی عزیز، هویت شما به عنوان مدیریت ارشد با موفقیت تایید شد. ابزارهای حاکمیتی، کدهای هسته، دفاتر کل و اسناد OCR فعال گردیدند. در خدمت شما هستم، چه دستوری دارید؟',
         agent: 'siraflow',
@@ -3648,10 +4331,6 @@ app.post('/api/gemini/voice-synapse', async (req: Request, res: Response) => {
         timestamp: new Date().toISOString()
       });
     }
-
-    const isSuperAdmin = currentAuthStatus === 'authenticated' || 
-      context.userRole === 'super_admin' || 
-      context.isSuperAdmin === true;
 
     // پروتکل امنیتی: فقط عملیات ریشه‌ای مخرب سیستمی نیازمند احراز هویت صوتی سوپرادمین هستند
     const isDestructiveRootAction = /حذف کل|پاک کردن دیتابیس|تغییر rls|غیرفعال کردن امنیت/i.test(trimmedMsg);
@@ -3669,6 +4348,13 @@ app.post('/api/gemini/voice-synapse', async (req: Request, res: Response) => {
     // ۲. پردازش پروتکل تایید دوبل (Double-Check Protocol) برای عملیات نوشتنی
     const isConfirmationAffirmative = /^(بله|تایید است|ثبت کن|انجام بده|تایید می‌کنم|بزن|اره|آره|درسته|موافقم|اوکیه|اوکی)$/i.test(trimmedMsg);
     if (pendingAction && isConfirmationAffirmative) {
+      if (!isSuperAdmin) {
+        return res.status(403).json({
+          reply: 'تأیید نهایی عملیات نوشتنی فقط با نشست معتبر بنیان‌گذار و احراز هویت صوتی مجاز است.',
+          voiceAuthStatus: currentAuthStatus,
+          isSuperAdmin: false
+        });
+      }
       const docTitle = pendingAction.title || pendingAction.docTitle || 'فاکتور مالی';
       const docNum = pendingAction.documentNumber || pendingAction.docId || 'DOC-OCR';
       const counterparty = pendingAction.counterparty || pendingAction.clientName || 'طرف‌حساب';
@@ -3787,6 +4473,7 @@ app.post('/api/gemini/voice-synapse', async (req: Request, res: Response) => {
     // Dynamic contextual reasoning with HabinoSynapseReasoningEngine if Gemini model cascade is momentarily offline
     const reasoningReply = HabinoSynapseReasoningEngine.generateVoiceResponse(trimmedMsg, {
       ...context,
+      userRole: isSuperAdmin ? 'super_admin' : 'tenant_owner',
       voiceAuthStatus: currentAuthStatus,
       isSuperAdmin,
       lastDiscussedEntity
@@ -3802,23 +4489,20 @@ app.post('/api/gemini/voice-synapse', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString()
     });
   } catch (err: any) {
-    console.log('[Voice Synapse] Notice: Local Synapse reasoning engine engaged.');
-    const isSuperAdminFallback = req.body?.voiceAuthStatus === 'authenticated' || 
-      req.body?.context?.userRole === 'super_admin' || 
-      req.body?.context?.isSuperAdmin === true;
-
+    console.error('[Voice Synapse] AI provider failed; using local reasoning:', err instanceof Error ? err.message : String(err));
     const fallbackReply = HabinoSynapseReasoningEngine.generateVoiceResponse(req.body?.message || '', {
       ...(req.body?.context || {}),
-      voiceAuthStatus: req.body?.voiceAuthStatus || 'locked',
-      isSuperAdmin: isSuperAdminFallback
+      userRole: isSuperAdmin ? 'super_admin' : 'tenant_owner',
+      voiceAuthStatus: currentAuthStatus,
+      isSuperAdmin
     });
     res.json({
       reply: fallbackReply,
-      error: err.message,
+      error: err instanceof Error ? err.message : 'خطا در پردازش درخواست صوتی.',
       agent: 'siraflow',
       modelUsed: 'synapse_neural_reasoning',
-      voiceAuthStatus: req.body?.voiceAuthStatus || 'locked',
-      isSuperAdmin: isSuperAdminFallback,
+      voiceAuthStatus: currentAuthStatus,
+      isSuperAdmin,
       timestamp: new Date().toISOString()
     });
   }
@@ -4432,9 +5116,517 @@ app.post('/api/agents/roadmap-ingest/inject', rbacGuard, async (req: Request, re
 /* Provides direct access, verification & execution of master database DDL   */
 /* ========================================================================= */
 
-// Get complete master production migration SQL script
-app.get('/api/admin/migration/sql', (req: Request, res: Response) => {
+type AdminTier = 'founder' | 'support' | 'billing' | 'sre';
+const ADMIN_TIERS: AdminTier[] = ['founder', 'support', 'billing', 'sre'];
+const isAdminTier = (value: unknown): value is AdminTier =>
+  typeof value === 'string' && ADMIN_TIERS.includes(value as AdminTier);
+const defaultAdminTier = (role: 'super_admin' | 'hubino_support'): AdminTier =>
+  role === 'super_admin' ? 'founder' : 'support';
+const resolveAdminTier = (value: unknown, role: 'super_admin' | 'hubino_support'): AdminTier => {
+  if (role === 'super_admin') return 'founder';
+  if (role === 'hubino_support' && (value === 'support' || value === 'billing' || value === 'sre')) return value;
+  return defaultAdminTier(role);
+};
+
+const getPlatformApiContext = async (req: Request) => {
+  const authorization = req.headers.authorization;
+  const accessToken = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+  if (!accessToken || accessToken.length > 8192) {
+    return { error: 'نشست احراز هویت معتبر الزامی است.', status: 401 as const };
+  }
+
+  const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const anonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim();
+  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    return { error: 'احراز هویت امن سمت سرور برای API مدیریت پلتفرم پیکربندی نشده است.', status: 503 as const };
+  }
+
+  let trustedUrl: URL;
   try {
+    trustedUrl = new URL(supabaseUrl);
+  } catch {
+    return { error: 'آدرس Supabase سمت سرور معتبر نیست.', status: 503 as const };
+  }
+  if (trustedUrl.protocol !== 'https:' && trustedUrl.hostname !== 'localhost' && trustedUrl.hostname !== '127.0.0.1') {
+    return { error: 'آدرس احراز هویت سمت سرور امن نیست.', status: 503 as const };
+  }
+
+  const authClient = createClient<any>(trustedUrl.origin, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+  });
+  const { data, error } = await authClient.auth.getUser(accessToken);
+  if (error || !data.user) {
+    return { error: 'توکن نشست معتبر نیست یا منقضی شده است.', status: 401 as const };
+  }
+
+  const role = data.user.app_metadata?.role;
+  if (role !== 'super_admin' && role !== 'hubino_support') {
+    return { error: 'دسترسی به API مدیریت پلتفرم مجاز نیست.', status: 403 as const };
+  }
+
+  const serviceClient = createClient<any>(trustedUrl.origin, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+  });
+  const adminTier = resolveAdminTier(data.user.app_metadata?.admin_tier, role);
+  return { authUser: data.user, role, adminTier, serviceClient, error: null };
+};
+
+const getAllAuthUsers = async (serviceClient: ReturnType<typeof createClient<any>>) => {
+  const users: Array<{
+    id: string;
+    email?: string;
+    user_metadata?: Record<string, unknown>;
+    app_metadata?: Record<string, unknown>;
+    last_sign_in_at?: string;
+    created_at: string;
+  }> = [];
+  let page = 1;
+  const perPage = 1000;
+  while (true) {
+    const { data, error } = await serviceClient.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+    users.push(...data.users);
+    if (data.users.length < perPage) break;
+    page += 1;
+  }
+  return users;
+};
+
+app.get('/api/admin/operators', async (req: Request, res: Response) => {
+  try {
+    const context = await getPlatformApiContext(req);
+    if (context.error) return res.status(context.status).json({ success: false, error: context.error });
+    if (context.role !== 'super_admin' || context.adminTier !== 'founder') {
+      return res.status(403).json({ success: false, error: 'فهرست اپراتورها فقط برای سوپرادمین قابل مشاهده است.' });
+    }
+
+    const users = await getAllAuthUsers(context.serviceClient);
+    const operators = users
+      .filter(user => {
+        const role = user.app_metadata?.role;
+        return role === 'super_admin' || role === 'hubino_support';
+      })
+      .map(user => {
+        const role = user.app_metadata?.role as 'super_admin' | 'hubino_support';
+        return {
+          id: user.id,
+          email: user.email || '',
+          fullName: user.user_metadata?.full_name || user.user_metadata?.name || '',
+          role,
+          adminTier: resolveAdminTier(user.app_metadata?.admin_tier, role),
+          lastSignInAt: user.last_sign_in_at || null,
+          createdAt: user.created_at
+        };
+      });
+    return res.json({ success: true, operators });
+  } catch (error) {
+    console.error('[PlatformOperators] Failed to list operators:', error instanceof Error ? error.message : String(error));
+    return res.status(502).json({ success: false, error: 'دریافت فهرست اپراتورهای پلتفرم ناموفق بود.' });
+  }
+});
+
+app.post('/api/admin/operators/role', async (req: Request, res: Response) => {
+  try {
+    const context = await getPlatformApiContext(req);
+    if (context.error) return res.status(context.status).json({ success: false, error: context.error });
+    if (context.role !== 'super_admin' || context.adminTier !== 'founder') {
+      return res.status(403).json({ success: false, error: 'تغییر نقش اپراتورها فقط برای سوپرادمین مجاز است.' });
+    }
+
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    let role = req.body?.role;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+      !['super_admin', 'hubino_support', 'tenant_owner'].includes(role)) {
+      return res.status(400).json({ success: false, error: 'ایمیل یا نقش انتخاب‌شده معتبر نیست.' });
+    }
+    const requestedAdminTier = req.body?.adminTier;
+    const resolvedAdminTier: AdminTier | null = role === 'tenant_owner'
+      ? null
+      : isAdminTier(requestedAdminTier)
+        ? requestedAdminTier
+        : requestedAdminTier == null
+          ? defaultAdminTier(role)
+          : null;
+    if (role !== 'tenant_owner' && !resolvedAdminTier) {
+      return res.status(400).json({ success: false, error: 'سطح دسترسی اپراتور معتبر نیست.' });
+    }
+    if (
+      (role === 'super_admin' && resolvedAdminTier !== 'founder') ||
+      (role === 'hubino_support' && !['support', 'billing', 'sre'].includes(resolvedAdminTier || ''))
+    ) {
+      return res.status(400).json({ success: false, error: 'سطح دسترسی با نقش پایهٔ انتخاب‌شده سازگار نیست.' });
+    }
+    if (email === 'tehrani.smart51@gmail.com' &&
+      (role !== 'super_admin' || resolvedAdminTier !== 'founder')) {
+      return res.status(409).json({ success: false, error: 'نقش بنیان‌گذار قابل تغییر یا لغو نیست.' });
+    }
+
+    const users = await getAllAuthUsers(context.serviceClient);
+    const target = users.find(user => user.email?.toLowerCase() === email);
+    if (!target) return res.status(404).json({ success: false, error: 'کاربری با این ایمیل در سامانه پیدا نشد.' });
+    const previousRole = target.app_metadata?.role;
+    if (previousRole === 'super_admin' && role !== 'super_admin' &&
+      users.filter(user => user.app_metadata?.role === 'super_admin').length <= 1) {
+      return res.status(409).json({ success: false, error: 'تغییر نقش آخرین سوپرادمین مجاز نیست.' });
+    }
+    const previousAdminTier = previousRole === 'super_admin' || previousRole === 'hubino_support'
+      ? resolveAdminTier(target.app_metadata?.admin_tier, previousRole)
+      : null;
+    if (previousRole === role && previousAdminTier === resolvedAdminTier) {
+      return res.json({
+        success: true,
+        operator: {
+          id: target.id,
+          email: target.email || '',
+          fullName: target.user_metadata?.full_name || target.user_metadata?.name || '',
+          role,
+          adminTier: resolvedAdminTier,
+          lastSignInAt: target.last_sign_in_at || null,
+          createdAt: target.created_at
+        }
+      });
+    }
+
+    const appMetadata = { ...(target.app_metadata || {}), role, admin_tier: resolvedAdminTier };
+    const { data: updatedData, error: updateError } = await context.serviceClient.auth.admin.updateUserById(target.id, {
+      app_metadata: appMetadata
+    });
+    if (updateError || !updatedData.user) throw updateError || new Error('Supabase did not return the updated operator.');
+
+    const { error: auditError } = await context.serviceClient.from('system_audit_events').insert({
+      tenant_id: null,
+      actor_id: context.authUser.id,
+      actor_role: context.role,
+      action: 'SUPER_ADMIN_ROLE_CHANGED',
+      resource_type: 'platform_operator',
+      resource_id: target.id,
+      outcome: 'succeeded',
+      reason_code: 'ROLE_UPDATED',
+      event_source: 'application'
+    });
+    if (auditError) {
+      const { error: rollbackError } = await context.serviceClient.auth.admin.updateUserById(target.id, {
+        app_metadata: target.app_metadata || {}
+      });
+      if (rollbackError) {
+        console.error('[PlatformOperators] Audit failed and role rollback failed:', rollbackError.message);
+        return res.status(502).json({ success: false, error: 'ثبت ممیزی و بازگردانی نقش ناموفق بود؛ وضعیت اپراتور باید بررسی شود.' });
+      }
+      throw auditError;
+    }
+
+    const user = updatedData.user;
+    return res.json({
+      success: true,
+      operator: {
+        id: user.id,
+        email: user.email || '',
+        fullName: user.user_metadata?.full_name || user.user_metadata?.name || '',
+        role,
+        adminTier: resolvedAdminTier,
+        lastSignInAt: user.last_sign_in_at || null,
+        createdAt: user.created_at
+      }
+    });
+  } catch (error) {
+    console.error('[PlatformOperators] Role update failed:', error instanceof Error ? error.message : String(error));
+    return res.status(502).json({ success: false, error: 'تغییر نقش اپراتور ناموفق بود؛ ممیزی سرور را بررسی کنید.' });
+  }
+});
+
+app.get('/api/admin/tenants-summary', async (req: Request, res: Response) => {
+  try {
+    const context = await getPlatformApiContext(req);
+    if (context.error) return res.status(context.status).json({ success: false, error: context.error });
+
+    const [{ data: tenants, error: tenantError }, { data: settings, error: settingsError }] = await Promise.all([
+      context.serviceClient
+        .from('tenants')
+        .select('id, name, slug, guild_type, owner_email, owner_name, status, created_at, metadata')
+        .order('created_at', { ascending: false }),
+      context.serviceClient
+        .from('company_settings')
+        .select('tenant_id, metadata')
+    ]);
+    if (tenantError) throw tenantError;
+    if (settingsError) throw settingsError;
+
+    const settingsByTenant = new Map((settings || []).map(row => {
+      const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+        ? row.metadata as Record<string, unknown>
+        : {};
+      return [row.tenant_id, metadata];
+    }));
+    const summaries = (tenants || []).map(row => {
+      const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+        ? row.metadata as Record<string, any>
+        : {};
+      const supportSettings = settingsByTenant.get(row.id) || {};
+      const rawSubscription = metadata.subscription && typeof metadata.subscription === 'object'
+        ? metadata.subscription
+        : null;
+      const subscription = rawSubscription ? {
+        plan: ['starter', 'professional', 'enterprise'].includes(rawSubscription.plan) ? rawSubscription.plan : 'starter',
+        planNameFa: typeof rawSubscription.planNameFa === 'string' ? rawSubscription.planNameFa : 'پایه',
+        status: ['active', 'expired', 'trial'].includes(rawSubscription.status) ? rawSubscription.status : 'active',
+        maxUsers: Number.isFinite(rawSubscription.maxUsers) ? Math.max(0, rawSubscription.maxUsers) : 0,
+        expiresAt: typeof rawSubscription.expiresAt === 'string' ? rawSubscription.expiresAt : '',
+        ...(Number.isFinite(rawSubscription.trialDaysRemaining) ? { trialDaysRemaining: rawSubscription.trialDaysRemaining } : {}),
+        ...(typeof rawSubscription.isSuspended === 'boolean' ? { isSuspended: rawSubscription.isSuspended } : {}),
+        ...(Array.isArray(rawSubscription.activeAddons)
+          ? { activeAddons: rawSubscription.activeAddons.filter((addon: unknown): addon is string => typeof addon === 'string') }
+          : {})
+      } : null;
+
+      return {
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        guildType: row.guild_type,
+        ownerName: row.owner_name,
+        ownerEmail: row.owner_email,
+        ownerPhone: typeof metadata.phone === 'string' ? metadata.phone : '',
+        status: row.status,
+        createdAt: row.created_at,
+        subscription,
+        allowSupportReadOnlyAccess: supportSettings.allowSupportReadOnlyAccess === true,
+        supportAccessGrantedUntil: typeof supportSettings.supportAccessGrantedUntil === 'string'
+          ? supportSettings.supportAccessGrantedUntil
+          : null
+      };
+    });
+    return res.json({ success: true, tenants: summaries });
+  } catch (error) {
+    console.error('[PlatformTenants] Failed to load tenant summaries:', error instanceof Error ? error.message : String(error));
+    return res.status(502).json({ success: false, error: 'دریافت خلاصهٔ مستأجران ناموفق بود.' });
+  }
+});
+
+app.post('/api/admin/impersonation/start', async (req: Request, res: Response) => {
+  try {
+    const context = await getPlatformApiContext(req);
+    if (context.error) return res.status(context.status).json({ success: false, error: context.error });
+    if (context.adminTier !== 'founder' && context.adminTier !== 'support') {
+      return res.status(403).json({ success: false, error: 'مشاهدهٔ مستأجر برای سطح دسترسی اپراتور شما مجاز نیست.' });
+    }
+
+    const tenantId = typeof req.body?.tenantId === 'string' ? req.body.tenantId : '';
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(tenantId)) {
+      return res.status(400).json({ success: false, error: 'شناسه مستأجر معتبر نیست.' });
+    }
+
+    const { data: tenantRow, error: tenantError } = await context.serviceClient
+      .from('tenants')
+      .select('id,status')
+      .eq('id', tenantId)
+      .maybeSingle();
+    if (tenantError) throw tenantError;
+    if (!tenantRow) {
+      return res.status(404).json({ success: false, error: 'مستأجر مقصد در سامانه پیدا نشد.' });
+    }
+    if (tenantRow.status === 'suspended') {
+      return res.status(409).json({
+        success: false,
+        error: 'فضای کاری این مستأجر تعلیق شده است و مشاهدهٔ پنل آن مجاز نیست. ابتدا وضعیت آن را تغییر دهید.'
+      });
+    }
+
+    const { data: settingsRow, error: settingsError } = await context.serviceClient
+      .from('company_settings')
+      .select('metadata')
+      .eq('tenant_id', tenantId)
+      .limit(1)
+      .maybeSingle();
+    if (settingsError) throw settingsError;
+
+    const metadata = settingsRow?.metadata && typeof settingsRow.metadata === 'object' && !Array.isArray(settingsRow.metadata)
+      ? settingsRow.metadata as Record<string, unknown>
+      : {};
+    const consentUntil = typeof metadata.supportAccessGrantedUntil === 'string'
+      ? Date.parse(metadata.supportAccessGrantedUntil)
+      : 0;
+    const consentGranted = metadata.allowSupportReadOnlyAccess === true &&
+      Number.isFinite(consentUntil) &&
+      consentUntil > Date.now();
+    const emergencyReason = typeof req.body?.reason === 'string'
+      ? req.body.reason.trim()
+        .replace(/[^\p{L}\p{N}_ .،,:;()-]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .slice(0, 180)
+      : '';
+    if (!consentGranted && emergencyReason.length < 8) {
+      return res.status(403).json({
+        success: false,
+        error: 'برای مشاهده مستأجر، رضایت معتبر او یا ثبت دلیل اضطراری معتبر الزامی است.'
+      });
+    }
+
+    const { error: auditError } = await context.serviceClient.from('system_audit_events').insert({
+      tenant_id: tenantId,
+      actor_id: context.authUser.id,
+      actor_role: context.role,
+      action: 'PLATFORM_IMPERSONATION_STARTED',
+      resource_type: 'tenant',
+      resource_id: tenantId,
+      outcome: 'succeeded',
+      reason_code: consentGranted ? 'CONSENT_GRANTED' : 'EMERGENCY_OVERRIDE',
+      event_source: 'application'
+    });
+    if (auditError) throw auditError;
+
+    if (!consentGranted) {
+      const { error: noteError } = await context.serviceClient.from('platform_support_notes').insert({
+        tenant_id: tenantId,
+        created_by: context.authUser.id,
+        category: 'bug_report',
+        content: `[مشاهدهٔ اضطراری بدون رضایت] ${emergencyReason}`
+      });
+      if (noteError) {
+        console.error('[PlatformImpersonation] Failed to record emergency reason:', noteError.message);
+        throw noteError;
+      }
+    }
+
+    return res.json({ success: true, consentGranted });
+  } catch (error) {
+    console.error('[PlatformImpersonation] Start rejected:', error instanceof Error ? error.message : String(error));
+    return res.status(502).json({ success: false, error: 'ثبت ممیزی دسترسی پشتیبانی ناموفق بود؛ ورود لغو شد.' });
+  }
+});
+
+app.post('/api/admin/licenses/issue', async (req: Request, res: Response) => {
+  try {
+    const context = await getPlatformApiContext(req);
+    if (context.error) return res.status(context.status).json({ success: false, error: context.error });
+    if (context.adminTier !== 'founder' && context.adminTier !== 'billing') {
+      return res.status(403).json({ success: false, error: 'صدور لایسنس فقط برای بنیان‌گذار یا کارشناس مالی و لایسنس مجاز است.' });
+    }
+
+    const tenantId = req.body?.tenantId;
+    const plan = req.body?.plan;
+    const durationDays = req.body?.durationDays;
+    if (typeof tenantId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(tenantId)) {
+      return res.status(400).json({ success: false, error: 'شناسه مستأجر معتبر نیست.' });
+    }
+    if (typeof plan !== 'string' || !['starter', 'professional', 'enterprise'].includes(plan)) {
+      return res.status(400).json({ success: false, error: 'پلن لایسنس معتبر نیست.' });
+    }
+    if (!Number.isInteger(durationDays) || ![30, 90, 180, 365, 9999].includes(durationDays)) {
+      return res.status(400).json({ success: false, error: 'مدت اعتبار لایسنس معتبر نیست.' });
+    }
+
+    const { data: tenant, error: tenantError } = await context.serviceClient
+      .from('tenants')
+      .select('id')
+      .eq('id', tenantId)
+      .maybeSingle();
+    if (tenantError) throw tenantError;
+    if (!tenant) return res.status(404).json({ success: false, error: 'مستأجر مقصد در سامانه پیدا نشد.' });
+
+    const serialKey = `HAB-${crypto.randomBytes(24).toString('hex').toUpperCase()}`;
+    const licenseHash = crypto.createHash('sha256').update(serialKey).digest('hex');
+    const isLifetime = durationDays === 9999;
+    const expiresAt = isLifetime ? null : new Date(Date.now() + durationDays * 86_400_000).toISOString();
+    const { error: licenseError } = await context.serviceClient.from('platform_licenses').insert({
+      tenant_id: tenantId,
+      license_hash: licenseHash,
+      plan,
+      duration_days: durationDays,
+      is_lifetime: isLifetime,
+      expires_at: expiresAt
+    });
+    if (licenseError) throw licenseError;
+
+    const { error: auditError } = await context.serviceClient.from('system_audit_events').insert({
+      action: 'PLATFORM_LICENSE_ISSUED',
+      resource_type: 'platform_license',
+      resource_id: tenantId,
+      outcome: 'succeeded',
+      reason_code: plan.toUpperCase(),
+      event_source: 'application',
+      actor_id: context.authUser.id,
+      actor_role: context.role,
+      tenant_id: tenantId
+    });
+    if (auditError) throw auditError;
+
+    return res.json({ success: true, serial_key: serialKey, expires_at: expiresAt, is_lifetime: isLifetime });
+  } catch (error) {
+    console.error('[PlatformLicense] Plan license issuance failed:', error instanceof Error ? error.message : String(error));
+    return res.status(502).json({ success: false, error: 'صدور لایسنس از سرویس امن ناموفق بود.' });
+  }
+});
+
+app.post('/api/admin/licenses/issue-addon', async (req: Request, res: Response) => {
+  try {
+    const context = await getPlatformApiContext(req);
+    if (context.error) return res.status(context.status).json({ success: false, error: context.error });
+    if (context.adminTier !== 'founder' && context.adminTier !== 'billing') {
+      return res.status(403).json({ success: false, error: 'صدور لایسنس فقط برای بنیان‌گذار یا کارشناس مالی و لایسنس مجاز است.' });
+    }
+
+    const tenantId = req.body?.tenantId;
+    const addonId = req.body?.addonId;
+    const durationDays = req.body?.durationDays;
+    if (typeof tenantId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(tenantId)) {
+      return res.status(400).json({ success: false, error: 'شناسه مستأجر معتبر نیست.' });
+    }
+    if (typeof addonId !== 'string' || !['addon_synapse', 'addon_payroll', 'addon_barcode_scanner', 'addon_extra_seats', 'addon_geo_mapping'].includes(addonId)) {
+      return res.status(400).json({ success: false, error: 'شناسه افزونه معتبر نیست.' });
+    }
+    if (!Number.isInteger(durationDays) || ![30, 90, 180, 365].includes(durationDays)) {
+      return res.status(400).json({ success: false, error: 'مدت اعتبار افزونه معتبر نیست.' });
+    }
+
+    const { data: tenant, error: tenantError } = await context.serviceClient
+      .from('tenants')
+      .select('id')
+      .eq('id', tenantId)
+      .maybeSingle();
+    if (tenantError) throw tenantError;
+    if (!tenant) return res.status(404).json({ success: false, error: 'مستأجر مقصد در سامانه پیدا نشد.' });
+
+    const serialKey = `HAB-${crypto.randomBytes(24).toString('hex').toUpperCase()}`;
+    const licenseHash = crypto.createHash('sha256').update(serialKey).digest('hex');
+    const expiresAt = new Date(Date.now() + durationDays * 86_400_000).toISOString();
+    const { error: licenseError } = await context.serviceClient.from('platform_licenses').insert({
+      tenant_id: tenantId,
+      license_hash: licenseHash,
+      addon_id: addonId,
+      duration_days: durationDays,
+      expires_at: expiresAt
+    });
+    if (licenseError) throw licenseError;
+
+    const { error: auditError } = await context.serviceClient.from('system_audit_events').insert({
+      action: 'PLATFORM_ADDON_LICENSE_ISSUED',
+      resource_type: 'platform_license',
+      resource_id: tenantId,
+      outcome: 'succeeded',
+      reason_code: 'ADDON_ISSUED',
+      event_source: 'application',
+      actor_id: context.authUser.id,
+      actor_role: context.role,
+      tenant_id: tenantId
+    });
+    if (auditError) throw auditError;
+
+    return res.json({ success: true, serial_key: serialKey, expires_at: expiresAt });
+  } catch (error) {
+    console.error('[PlatformLicense] Add-on license issuance failed:', error instanceof Error ? error.message : String(error));
+    return res.status(502).json({ success: false, error: 'صدور لایسنس افزونه از سرویس امن ناموفق بود.' });
+  }
+});
+
+// Get complete master production migration SQL script
+app.get('/api/admin/migration/sql', async (req: Request, res: Response) => {
+  try {
+    const context = await getPlatformApiContext(req);
+    if (context.error) return res.status(context.status).json({ success: false, error: context.error });
+    if (context.adminTier !== 'founder' && context.adminTier !== 'sre') {
+      return res.status(403).json({ success: false, error: 'دریافت اسکریپت مهاجرت فقط برای بنیان‌گذار یا SRE مجاز است.' });
+    }
     const candidates = [
       path.join(process.cwd(), 'supabase_master_production_migration.sql'),
       path.join(process.cwd(), 'src', 'db', 'supabase_master_production_migration.sql')
@@ -4471,6 +5663,11 @@ app.get('/api/admin/migration/sql', (req: Request, res: Response) => {
 // Verify & status report for remote Supabase migration
 app.post('/api/admin/migration/verify', async (req: Request, res: Response) => {
   try {
+    const context = await getPlatformApiContext(req);
+    if (context.error) return res.status(context.status).json({ success: false, error: context.error });
+    if (context.adminTier !== 'founder' && context.adminTier !== 'sre') {
+      return res.status(403).json({ success: false, error: 'بررسی مهاجرت فقط برای بنیان‌گذار یا SRE مجاز است.' });
+    }
     const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
     const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
 

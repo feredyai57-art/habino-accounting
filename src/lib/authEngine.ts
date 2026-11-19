@@ -45,6 +45,14 @@ export const PLATFORM_ONLY_MODULES = new Set([
   'tenant_isolation'
 ]);
 
+const PLATFORM_FINANCIAL_MODULES = new Set([
+  'invoices', 'checks', 'banks', 'ledger', 'payroll', 'inventory', 'clients', 'reports'
+]);
+const ISOLATED_ENGINEERING_MODULES = new Set([
+  'roadmap', 'diagnostics', 'supabase_tester', 'pre_launch_qa',
+  'accounting_verification', 'stress_test', 'tenant_isolation'
+]);
+
 export const FUTURE_RELEASE_MODULES = new Set([
   'agents_studio',
   'basket_optimization',
@@ -266,6 +274,21 @@ export const HABINO_ADDONS: AddonItem[] = [
     problemFa: 'فقدان بستر بصری برای مانیتورینگ و مدیریت ارتباطات متقابل ایجنت‌های هوش مصنوعی مستقل در شرکت‌ها.',
     solutionFa: 'داشبورد گرافیکی اتصال ایجنت‌ها با مانیتورینگ بلادرنگ جریان پیام‌ها و تصمیمات.',
     revenueModelFa: 'اشتراک ماهیانه سازمانی بر اساس تعداد ایجنت و حجم وظایف پردازش‌شده.'
+  },
+  {
+    id: 'addon_geo_mapping',
+    title: 'افزونه نقشه آنلاین، موقعیت‌یاب و لینک مسیریابی مشتری',
+    category: 'operational',
+    status: 'available',
+    billingType: 'yearly',
+    priceToman: 590000,
+    badge: 'پخش، پروژه و ارسال کالا',
+    unlocksModules: ['geo_mapping'],
+    description: 'انتخاب آدرس روی نقشه، ثبت مختصات و دسترسی به لینک مسیریابی مشتری.',
+    roadmapPhase: 'فاز عملیاتی',
+    problemFa: 'ثبت دستی و نادقیق نشانی و دشواری یافتن مسیر مشتریان و محل پروژه‌ها.',
+    solutionFa: 'جستجوی مکانی، انتخاب مختصات و لینک مسیریابی در فرم‌های آدرس‌محور.',
+    revenueModelFa: 'اشتراک سالانه ۵۹۰,۰۰۰ تومان.'
   }
 ];
 
@@ -457,15 +480,15 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermission[]> = {
 
 export const ROLE_DETAILS_FA: Record<UserRole, { title: string; badgeColor: string; description: string; tierLevel: 'platform' | 'tenant_admin' | 'tenant_staff' }> = {
   super_admin: {
-    title: 'ادمین ارشد هابینو (Super Admin)',
+    title: 'بنیان‌گذار و سوپرادمین کل (Founder / Super Admin)',
     badgeColor: 'bg-purple-100 text-purple-800 border-purple-300',
-    description: 'سطح ۱ پلتفرم: دسترسی فراگیر به کل سیستم، جابجایی نامحدود بین تمام مستأجران و مدیریت لایسنس‌ها.',
+    description: 'حاکمیت کل پلتفرم: مدیریت و عزل‌ونصب اپراتورها، تعلیق مستأجران، آزمایشگاه مهندسی و پروتکل ممیزی‌شدهٔ Break-Glass.',
     tierLevel: 'platform'
   },
   hubino_support: {
-    title: 'پشتیبان فنی هابینو (Hubino Support)',
+    title: 'اپراتور عملیات و پشتیبان مستأجران (Hubino Operator / Support)',
     badgeColor: 'bg-teal-100 text-teal-800 border-teal-300',
-    description: 'سطح ۱ پلتفرم: عیب‌یابی سیستم، بررسی لاگ‌های خطا و وضعیت سرور بدون دسترسی به ارقام محرمانه مالی مشتریان.',
+    description: 'تفکیک‌شده با سطح دسترسی (support / billing / sre): پشتیبانی مستأجران با مشاهدهٔ فقط‌خواندنی ۳۰دقیقه‌ای، لایسنس یا پایش زیرساخت بدون دسترسی مالی.',
     tierLevel: 'platform'
   },
   tenant_owner: {
@@ -734,27 +757,58 @@ export class HabinoAuthEngine {
   public static canAccessModule(
     user: AppUser | null,
     moduleId: string,
-    tenant?: Tenant
+    tenant?: Tenant,
+    options?: { isImpersonatingReadOnly?: boolean }
   ): { allowed: boolean; reasonFa?: string; gateType?: 'plan' | 'role' | 'platform' | 'release'; requiredPlan?: SubscriptionPlanType } {
     if (!user) {
       return { allowed: false, reasonFa: 'جهت دسترسی به این بخش ابتدا وارد حساب کاربری خود شوید.', gateType: 'role' };
     }
 
-    // LEVEL 1: Super Admin has unrestricted access everywhere
-    if (user.role === 'super_admin') {
-      return { allowed: true };
+    const isPlatformUser = user.role === 'super_admin' || user.role === 'hubino_support';
+    const adminTier = user.adminTier || (user.role === 'super_admin' ? 'founder' : 'support');
+    const isReadOnlyImpersonation = options?.isImpersonatingReadOnly === true;
+    if (isPlatformUser && PLATFORM_FINANCIAL_MODULES.has(moduleId) && !isReadOnlyImpersonation) {
+      return {
+        allowed: false,
+        reasonFa: 'اپراتور پلتفرم بدون جلسه مشاهده مستأجر به داده‌های مالی دسترسی ندارد.',
+        gateType: 'role'
+      };
     }
 
-    // LEVEL 1: Platform Support has technical/diagnostic access only
-    if (user.role === 'hubino_support') {
-      if (moduleId !== 'admin_panel') {
+    if (
+      ISOLATED_ENGINEERING_MODULES.has(moduleId) &&
+      !(isPlatformUser && adminTier === 'founder' && !isReadOnlyImpersonation)
+    ) {
+      return {
+        allowed: false,
+        reasonFa: 'ابزارهای مهندسی فقط از آزمایشگاه اختصاصی بنیان‌گذار در دسترس هستند.',
+        gateType: 'platform'
+      };
+    }
+
+    if (isPlatformUser && !isReadOnlyImpersonation) {
+      if (moduleId === 'admin_panel' || moduleId === 'settings') return { allowed: true };
+      if (adminTier === 'founder') return { allowed: true };
+      if (adminTier === 'billing' && moduleId === 'license') return { allowed: true };
+      if (adminTier === 'support') {
         return {
           allowed: false,
-          reasonFa: 'پشتیبان فنی هابینو فقط به پنل پشتیبانی محدود دسترسی دارد.',
+          reasonFa: 'پشتیبان مستأجران فقط به میز کار پشتیبانی و تنظیمات پایه دسترسی دارد.',
           gateType: 'role'
         };
       }
-      return { allowed: true };
+      if (adminTier === 'sre') {
+        return {
+          allowed: false,
+          reasonFa: 'مهندس زیرساخت فقط به کنسول زیرساخت و ممیزی دسترسی دارد.',
+          gateType: 'role'
+        };
+      }
+      return {
+        allowed: false,
+        reasonFa: 'دسترسی این ماژول برای سطح اپراتوری شما مجاز نیست.',
+        gateType: 'role'
+      };
     }
 
     // Platform admin console is strictly protected for platform admins
@@ -890,9 +944,17 @@ export class HabinoAuthEngine {
    */
   public static canMutateData(
     user: AppUser | null,
-    action: 'create' | 'update' | 'delete'
+    action: 'create' | 'update' | 'delete',
+    options?: { isImpersonatingReadOnly?: boolean }
   ): { allowed: boolean; reasonFa?: string } {
     if (!user) return { allowed: false, reasonFa: 'کاربر ناشناس' };
+
+    if (options?.isImpersonatingReadOnly === true) {
+      return {
+        allowed: false,
+        reasonFa: 'در حالت مشاهده پشتیبانی فقط‌خواندنی، امکان تغییر یا ثبت اسناد مالی وجود ندارد.'
+      };
+    }
     
     if (user.role === 'super_admin' || user.role === 'tenant_owner') {
       return { allowed: true };

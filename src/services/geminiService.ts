@@ -1,10 +1,22 @@
 import { HabinoSynapseReasoningEngine } from '../lib/agents/synapseReasoningEngine';
+import { getSupabaseClient, getSupabaseConfig } from '../lib/supabase';
+
+const getAiRequestHeaders = async (): Promise<Record<string, string>> => {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (!getSupabaseConfig().isConfigured) return headers;
+
+  const { data, error } = await getSupabaseClient().auth.getSession();
+  if (error) throw new Error(`بازیابی نشست برای سرویس هوش مصنوعی ناموفق بود: ${error.message}`);
+  const accessToken = data.session?.access_token;
+  if (!accessToken) throw new Error('برای استفاده از سرویس هوش مصنوعی، نشست معتبر لازم است.');
+  return { ...headers, Authorization: `Bearer ${accessToken}` };
+};
 
 export async function getCashflowInsights(summaryData: any): Promise<{ insights: string; suggestions?: string[] }> {
   try {
     const response = await fetch('/api/gemini/cashflow-insights', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await getAiRequestHeaders(),
       body: JSON.stringify({ summaryData })
     });
     if (!response.ok) throw new Error('خطا در دریافت تحلیل جریان نقدی');
@@ -24,7 +36,7 @@ export async function categorizeTransaction(description: string, amount: number,
   try {
     const response = await fetch('/api/gemini/categorize-transaction', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await getAiRequestHeaders(),
       body: JSON.stringify({ description, amount, type })
     });
     if (!response.ok) throw new Error('خطا در دسته‌بندی');
@@ -78,7 +90,7 @@ export async function chatWithSiraFlow(
 
     const response = await fetch('/api/gemini/voice-synapse', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await getAiRequestHeaders(),
       body: JSON.stringify(payload)
     });
     if (!response.ok) throw new Error('خطا در ارتباط با سایرافلو');
@@ -88,7 +100,7 @@ export async function chatWithSiraFlow(
       modelUsed: data.modelUsed,
       agent: data.agent,
       voiceAuthStatus: data.voiceAuthStatus || data.newAuthStatus,
-      newAuthStatus: data.newAuthStatus,
+      newAuthStatus: data.newAuthStatus || data.voiceAuthStatus,
       requiresConfirmation: !!data.pendingAction,
       pendingAction: data.pendingAction,
       executedAction: data.executedAction,
@@ -96,20 +108,32 @@ export async function chatWithSiraFlow(
     };
   } catch (error) {
     const fallbackCtx = optionsOrContext?.context || optionsOrContext || {};
-    const isSuperAdmin = optionsOrContext?.voiceAuthStatus === 'authenticated' || 
-      fallbackCtx?.userRole === 'super_admin' || 
-      fallbackCtx?.isSuperAdmin === true;
+    let authenticatedRole: string | null = null;
+    if (getSupabaseConfig().isConfigured) {
+      try {
+        const { data, error: authError } = await getSupabaseClient().auth.getUser();
+        if (authError) throw authError;
+        authenticatedRole = data.user?.app_metadata?.role === 'super_admin' ? 'super_admin' : null;
+      } catch (authError) {
+        console.error('[Voice Synapse] Failed to verify fallback user role:', authError);
+      }
+    }
+    const isSuperAdmin = authenticatedRole === 'super_admin' &&
+      optionsOrContext?.voiceAuthStatus === 'authenticated';
+    const fallbackVoiceAuthStatus = isSuperAdmin ? 'authenticated' : 'locked';
 
     const dynamicReply = HabinoSynapseReasoningEngine.generateVoiceResponse(message, {
       ...fallbackCtx,
+      userRole: authenticatedRole || 'tenant_owner',
       isSuperAdmin,
-      voiceAuthStatus: optionsOrContext?.voiceAuthStatus || (isSuperAdmin ? 'authenticated' : 'locked')
+      voiceAuthStatus: fallbackVoiceAuthStatus
     });
 
     return {
       reply: dynamicReply,
       modelUsed: 'synapse_neural_engine_offline',
-      voiceAuthStatus: isSuperAdmin ? 'authenticated' : 'locked'
+      voiceAuthStatus: fallbackVoiceAuthStatus,
+      newAuthStatus: fallbackVoiceAuthStatus
     };
   }
 }
@@ -244,7 +268,7 @@ export async function callOmniRoute(options: OmniChatOptions): Promise<{
   try {
     const response = await fetch('/api/ai/omni', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await getAiRequestHeaders(),
       body: JSON.stringify(options)
     });
     if (!response.ok) throw new Error('خطا در ارتباط با مسیر Omni');
@@ -252,8 +276,8 @@ export async function callOmniRoute(options: OmniChatOptions): Promise<{
   } catch (err: any) {
     const lastUserMsg = [...options.messages].reverse().find(m => m.role === 'user')?.content || '';
     const fallbackText = HabinoSynapseReasoningEngine.generateVoiceResponse(lastUserMsg, {
-      userRole: 'super_admin',
-      voiceAuthStatus: 'authenticated'
+      userRole: 'tenant_owner',
+      voiceAuthStatus: 'locked'
     });
     return {
       success: true,

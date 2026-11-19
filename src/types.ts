@@ -7,6 +7,11 @@ export interface Client {
   phone?: string;
   email?: string;
   address?: string;
+  postalCode?: string;
+  lat?: number;
+  lng?: number;
+  latitude?: number;
+  longitude?: number;
   nationalCode?: string;
   economicCode?: string;
   companyName?: string;
@@ -286,6 +291,7 @@ export interface Project {
   totalExpense?: number;
   netProfit?: number;
   description?: string;
+  coordinates?: { lat: number; lng: number };
   laborDays?: ProjectLaborDaysRecord[];
   progressStatements?: ProjectProgressStatement[];
   metadata?: Record<string, any>;
@@ -700,6 +706,10 @@ export interface CompanySettings {
   email?: string;
   address: string;
   postalCode?: string;
+  lat?: number;
+  lng?: number;
+  latitude?: number;
+  longitude?: number;
   website?: string;
   logoUrl?: string;
   stampUrl?: string;
@@ -712,6 +722,8 @@ export interface CompanySettings {
   defaultInvoiceDesign?: InvoiceDesignConfig;
   openingPeriodStatus?: 'in_progress' | 'completed';
   openingPeriodStandardVersion?: number;
+  allowSupportReadOnlyAccess?: boolean;
+  supportAccessGrantedUntil?: string;
   ssoConfig?: SSODisketteConfig;
   guild?: string; // Tenant business guild e.g. services, consumables, installation, gold, it, general
   guildType?: string; // Guild type strategy alias
@@ -1009,6 +1021,9 @@ export interface SSODisketteConfig {
   workshopName: string; // نام کارگاه
   employerName: string; // نام کارفرما / مدیرعامل
   workshopAddress: string;
+  postalCode?: string;
+  latitude?: number;
+  longitude?: number;
   subContractCode: string; // ردیف پیمان (معمولاً ۰۰۰ برای کارگاه عادی)
   insuranceBranch: string; // نام یا کد شعبه تأمین اجتماعی
   employerRate: number; // درصد حق بیمه سهم کارفرما (معمولاً ۲۰٪ - متغیر بر حسب سال یا کارگاه)
@@ -1129,6 +1144,8 @@ export interface TenantMetadata {
   themeColor?: string;
   mowadianClientId?: string;
   autoDoubleEntryEnabled?: boolean;
+  allowSupportReadOnlyAccess?: boolean;
+  supportAccessGrantedUntil?: string;
 }
 
 export interface Tenant {
@@ -1150,6 +1167,8 @@ export interface Tenant {
   };
 }
 
+export type AdminTier = 'founder' | 'support' | 'billing' | 'sre';
+
 export interface AppUser {
   id: string;
   tenantId: string;
@@ -1157,6 +1176,7 @@ export interface AppUser {
   phone: string;
   fullName: string;
   role: UserRole;
+  adminTier?: AdminTier;
   permissions: UserPermission[];
   status: 'active' | 'disabled';
   avatarUrl?: string;

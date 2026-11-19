@@ -35,6 +35,18 @@ export interface SystemFinancialState {
   totalDebit?: number;
   totalCredit?: number;
   liquidityRatio?: number;
+  clientProfiles?: Array<{
+    name: string;
+    companyName?: string;
+    phone?: string;
+    nationalCode?: string;
+    postalCode?: string;
+    address?: string;
+    lat?: number;
+    lng?: number;
+    balance: number;
+  }>;
+  canViewClientFinancials?: boolean;
   [key: string]: any;
 }
 
@@ -52,6 +64,91 @@ export interface AgentRoundtableItem {
 }
 
 export class HabinoSynapseReasoningEngine {
+  static generateClientProfileResponse(message: string, context: SystemFinancialState = {}): string | null {
+    const normalize = (value: string) => value
+      .toLocaleLowerCase('fa-IR')
+      .replace(/[ي]/g, 'ی')
+      .replace(/[ك]/g, 'ک')
+      .replace(/[\u200c\u200f]/g, ' ')
+      .replace(/[۰-۹]/g, digit => String(digit.charCodeAt(0) - 1776))
+      .replace(/[٠-٩]/g, digit => String(digit.charCodeAt(0) - 1632));
+    const q = normalize(message || '');
+    const isDirectoryRequest =
+      /(?:لیست|فهرست|دفترچه|چاپ|پرینت)/.test(q) &&
+      /(?:مشتری|مخاطب|طرف.?حساب|آدرس|نشانی)/.test(q);
+    const isProfileRequest =
+      /(?:آدرس|نشانی|پروفایل|مشخصات|مختصات|تلفن|شماره\s*(?:تماس|تلفن)|کد\s*(?:پستی|ملی)|شناسه\s*ملی)/.test(q) ||
+      /(?:نام|اطلاعات|مشخصات)\s*(?:مشتری|مخاطب|طرف.?حساب)/.test(q) ||
+      /(?:مشتری|مخاطب|طرف.?حساب)\s*(?:نام|اطلاعات|مشخصات)/.test(q) ||
+      /(?:مانده|بدهی|طلب|بدهکار|بستانکار|سقف اعتبار|اعتبار مالی).*(?:مشتری|مخاطب|طرف.?حساب)|(?:مشتری|مخاطب|طرف.?حساب).*(?:مانده|بدهی|طلب|بدهکار|بستانکار|سقف اعتبار|اعتبار مالی)/.test(q);
+
+    if (!isDirectoryRequest && !isProfileRequest) return null;
+
+    if (isDirectoryRequest && /(?:چاپ|پرینت)/.test(q)) {
+      return 'برای چاپ دفترچه مخاطبین، وارد بخش طرف‌حساب‌ها شوید و گزینه «چاپ دفترچه نشانی» را انتخاب کنید. این درخواست هیچ تغییری در اطلاعات مالی ایجاد نمی‌کند.';
+    }
+
+    const requestsFinancials = /(?:مانده|بدهی|طلب|بدهکار|بستانکار|سقف اعتبار|اعتبار مالی)/.test(q);
+    if (requestsFinancials && context.canViewClientFinancials !== true) {
+      return 'برای مشاهده اطلاعات مالی طرف‌حساب، مجوز مشاهده گزارش‌های مالی لازم است.';
+    }
+
+    const profiles = (context.clientProfiles || []).slice(0, 10);
+    if (profiles.length === 0) {
+      return 'طرف‌حسابی مطابق درخواست در اطلاعات در دسترس پیدا نشد.';
+    }
+
+    const nameTokens = q
+      .replace(/[،,.؟?!]/g, ' ')
+      .split(/\s+/)
+      .filter(token => token.length > 1 && ![
+        'مشتری', 'مشتریان', 'مخاطب', 'مخاطبان', 'طرف', 'حساب', 'طرفحساب',
+        'آدرس', 'نشانی', 'پروفایل', 'مشخصات', 'اطلاعات', 'تلفن', 'شماره',
+        'تماس', 'کد', 'پستی', 'مختصات', 'لیست', 'فهرست', 'دفترچه', 'چاپ',
+        'پرینت', 'را', 'بده', 'بگو', 'برای', 'میخواهم', 'میخوام'
+      ].includes(token));
+    const matchedProfiles = nameTokens.length > 0
+      ? profiles.filter(profile => {
+        const searchable = [
+          profile.name,
+          profile.companyName,
+          profile.phone,
+          profile.nationalCode,
+          profile.postalCode,
+          profile.address
+        ].filter(Boolean).join(' ');
+        const normalizedSearchable = normalize(searchable);
+        return nameTokens.some(token => normalizedSearchable.includes(token));
+      })
+      : isDirectoryRequest ? profiles : [];
+    const selectedProfiles = matchedProfiles.slice(0, 10);
+
+    if (selectedProfiles.length === 0) {
+      return 'طرف‌حسابی مطابق درخواست در اطلاعات در دسترس پیدا نشد.';
+    }
+
+    if (isDirectoryRequest) {
+      const entries = selectedProfiles.map((profile, index) =>
+        `${index + 1}. ${profile.name}${profile.phone ? `، تماس: ${profile.phone}` : ''}${profile.address ? `، نشانی: ${profile.address}` : ''}${profile.postalCode ? `، کد پستی: ${profile.postalCode}` : ''}`
+      );
+      return `فهرست ${entries.length} مخاطب:\n${entries.join('\n')}`;
+    }
+
+    const selected = selectedProfiles[0];
+    const details = [
+      `نام: ${selected.name}`,
+      selected.companyName ? `شرکت: ${selected.companyName}` : '',
+      selected.phone ? `تلفن: ${selected.phone}` : '',
+      selected.address ? `نشانی: ${selected.address}` : '',
+      selected.postalCode ? `کد پستی: ${selected.postalCode}` : '',
+      selected.nationalCode ? `کد ملی/شناسه: ${selected.nationalCode}` : '',
+      selected.lat !== undefined && selected.lng !== undefined ? `مختصات: ${selected.lat}, ${selected.lng}` : '',
+      requestsFinancials ? `مانده حساب: ${selected.balance.toLocaleString('fa-IR')} ${context.currency || 'تومان'}` : ''
+    ].filter(Boolean);
+
+    return details.join('؛ ');
+  }
+
   /**
    * Generates a voice-optimized response for SiraFlow Voice Assistant
    * Supports Dual-Persona Governance:
@@ -59,6 +156,9 @@ export class HabinoSynapseReasoningEngine {
    * 2. Tenant Mode: 24/7 Smart CFO, deep learning financial predictions, multi-module accounting assistance
    */
   static generateVoiceResponse(message: string, context: SystemFinancialState = {}): string {
+    const clientProfileReply = HabinoSynapseReasoningEngine.generateClientProfileResponse(message, context);
+    if (clientProfileReply) return clientProfileReply;
+
     const q = (message || '').toLowerCase();
     const isSuperAdmin = context.isSuperAdmin === true || 
       context.userRole === 'super_admin' || 

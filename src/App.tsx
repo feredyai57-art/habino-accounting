@@ -1,17 +1,23 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { AccountingProvider, useAccounting } from './lib/store';
 import { SiraFlowProvider } from './lib/siraflowStore';
 import { Dashboard } from './components/Dashboard';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OutboxSyncBadge } from './components/OutboxSyncBadge';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { PlatformImpersonationBanner } from './components/PlatformImpersonationBanner';
 import { LoginModal } from './components/LoginModal';
 import { UpgradeModal } from './components/UpgradeModal';
 import { HabinoLandingPage } from './components/HabinoLandingPage';
 import { BazaarOnboardingModal } from './components/BazaarOnboardingModal';
 import { SecurityGate } from './components/common/SecurityGates';
 import { FUTURE_RELEASE_MODULES, PLATFORM_ONLY_MODULES, ROLE_DETAILS_FA } from './lib/authEngine';
+import { ENABLE_OS_DESKTOP } from './lib/moduleVisibility';
 import { lazyWithRetry } from './lib/lazyWithRetry';
+
+const ISOLATED_ENGINEERING_MODULES = new Set([
+  'roadmap', 'diagnostics', 'supabase_tester', 'pre_launch_qa', 'accounting_verification', 'agents_studio'
+]);
 
 const ThemeSynchronizer: React.FC = () => {
   useEffect(() => {
@@ -141,9 +147,11 @@ const MainLayout: React.FC = () => {
   });
 
   const [viewMode, setViewMode] = useState<'landing' | 'desktop' | 'classic'>(() => {
-    return (localStorage.getItem('habino_view_mode') as 'landing' | 'desktop' | 'classic') || 'landing';
+    const stored = (localStorage.getItem('habino_view_mode') as 'landing' | 'desktop' | 'classic') || 'landing';
+    return stored === 'desktop' && !ENABLE_OS_DESKTOP ? 'classic' : stored;
   });
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [hasDismissedAdminRoute, setHasDismissedAdminRoute] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [loginModalOpen, setLoginModalOpen] = useState<boolean>(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState<boolean>(false);
@@ -151,8 +159,14 @@ const MainLayout: React.FC = () => {
   const [showAdvancedStudios, setShowAdvancedStudios] = useState<boolean>(() => {
     return localStorage.getItem('habino_show_advanced_studios') === 'true';
   });
-  const { currentUser, activeTenant, license } = useAccounting();
+  const { currentUser, activeTenant, license, impersonationSession } = useAccounting();
   const isPlatformAdmin = currentUser?.role === 'super_admin';
+  const isPlatformOperator = currentUser?.role === 'super_admin' || currentUser?.role === 'hubino_support';
+  const isAdminRoute = typeof window !== 'undefined' && (
+    window.location.pathname === '/admin' ||
+    window.location.pathname.startsWith('/admin/') ||
+    new URLSearchParams(window.location.search).get('view') === 'admin'
+  );
 
   useEffect(() => {
     const syncTheme = () => {
@@ -178,7 +192,7 @@ const MainLayout: React.FC = () => {
 
   const isTrial = activeTenant?.subscription?.status === 'trial' || license.tier === 'trial';
   const trialDaysRemaining = activeTenant?.subscription?.trialDaysRemaining ?? 30;
-  const isSuspended = currentUser?.role !== 'super_admin' && (activeTenant?.subscription?.isSuspended || (isTrial && trialDaysRemaining <= 0));
+  const isSuspended = !isPlatformOperator && (activeTenant?.subscription?.isSuspended || (isTrial && trialDaysRemaining <= 0));
   const currentOrigin = typeof window !== 'undefined' ? new URL(window.location.href) : null;
   const isLanIpOrigin = !!currentOrigin && /^(10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})$/.test(currentOrigin.hostname);
   const stableLocalOrigin = isLanIpOrigin && currentOrigin
@@ -186,9 +200,36 @@ const MainLayout: React.FC = () => {
     : '';
 
   const handleToggleViewMode = (mode: 'landing' | 'desktop' | 'classic') => {
-    setViewMode(mode);
-    localStorage.setItem('habino_view_mode', mode);
+    const effectiveMode = mode === 'desktop' && !ENABLE_OS_DESKTOP ? 'classic' : mode;
+    setViewMode(effectiveMode);
+    localStorage.setItem('habino_view_mode', effectiveMode);
   };
+
+  const wasImpersonatingRef = useRef(impersonationSession?.isActive === true);
+  useEffect(() => {
+    const isImpersonating = impersonationSession?.isActive === true;
+    if (wasImpersonatingRef.current && !isImpersonating && isPlatformOperator) {
+      setHasDismissedAdminRoute(false);
+    }
+    wasImpersonatingRef.current = isImpersonating;
+  }, [isPlatformOperator, impersonationSession?.isActive]);
+
+  useEffect(() => {
+    if (!isAdminRoute || !currentUser || isPlatformOperator) return;
+    const redirectTimer = window.setTimeout(() => {
+      window.history.replaceState({}, '', '/');
+      setActiveTab('dashboard');
+      handleToggleViewMode('classic');
+    }, 1800);
+    return () => window.clearTimeout(redirectTimer);
+  }, [isAdminRoute, currentUser?.id, isPlatformOperator]);
+
+  useEffect(() => {
+    if (!isPlatformOperator || isAdminRoute || impersonationSession?.isActive || hasDismissedAdminRoute) return;
+    window.history.replaceState({}, '', '/admin');
+    setActiveTab('admin_panel');
+    handleToggleViewMode('classic');
+  }, [isPlatformOperator, isAdminRoute, impersonationSession?.isActive, hasDismissedAdminRoute]);
 
   // If a public link token is present in the URL, render Public Invoice View directly (No login required)
   if (publicInvoiceToken) {
@@ -209,11 +250,52 @@ const MainLayout: React.FC = () => {
     );
   }
 
+  if (isPlatformOperator && !isAdminRoute && !impersonationSession?.isActive && !hasDismissedAdminRoute) {
+    return <div className="flex min-h-screen items-center justify-center text-sm text-slate-600" dir="rtl">در حال ورود به کنسول مدیریت...</div>;
+  }
+
+  if (isAdminRoute) {
+    const leaveAdminRoute = () => {
+      setHasDismissedAdminRoute(true);
+      window.history.replaceState({}, '', '/');
+      setActiveTab('dashboard');
+      handleToggleViewMode(currentUser ? 'classic' : 'landing');
+    };
+    const enterTenantPreview = () => {
+      setHasDismissedAdminRoute(true);
+      window.history.replaceState({}, '', '/');
+      setActiveTab('dashboard');
+      handleToggleViewMode('classic');
+    };
+    if (isPlatformOperator) {
+      return (
+        <div className="min-h-screen bg-slate-50">
+          <PlatformImpersonationBanner onShowTenantPreview={enterTenantPreview} />
+          <Suspense fallback={<div className="flex min-h-[50vh] items-center justify-center text-sm text-slate-500">در حال بارگذاری کنسول مدیریت...</div>}>
+            <HabinoAdminPanel onExitAdmin={leaveAdminRoute} onEnterTenantPreview={enterTenantPreview} />
+          </Suspense>
+        </div>
+      );
+    }
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6" dir="rtl">
+        <section className="max-w-lg rounded-2xl border border-rose-200 bg-white p-6 text-center shadow-sm">
+          <h1 className="font-black text-rose-900">{currentUser ? 'دسترسی به کنسول مدیریت مجاز نیست' : 'برای ورود به کنسول ابتدا وارد شوید'}</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-600">پنل مدیریت فقط برای سوپرادمین و کارشناسان احراز‌شدهٔ پشتیبانی هابینو در دسترس است.</p>
+          <button type="button" onClick={leaveAdminRoute} className="mt-4 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white">بازگشت به فضای کار</button>
+          {!currentUser && (
+            <LoginModal isOpen={true} onClose={leaveAdminRoute} onOpenUpgradeModal={() => setUpgradeModalOpen(true)} />
+          )}
+        </section>
+      </div>
+    );
+  }
+
   if (viewMode === 'landing') {
     return (
       <>
         <HabinoLandingPage
-          onEnterAccounting={(module, targetMode = 'desktop') => {
+          onEnterAccounting={(module, targetMode = ENABLE_OS_DESKTOP ? 'desktop' : 'classic') => {
             if (module) setActiveTab(module);
             handleToggleViewMode(targetMode);
           }}
@@ -229,7 +311,7 @@ const MainLayout: React.FC = () => {
     );
   }
 
-  if (viewMode === 'desktop') {
+  if (ENABLE_OS_DESKTOP && viewMode === 'desktop') {
     return (
       <>
         {stableLocalOrigin && <StableLocalPwaNotice stableLocalOrigin={stableLocalOrigin} />}
@@ -299,6 +381,16 @@ const MainLayout: React.FC = () => {
     { id: 'roadmap', label: 'رودمپ و تصمیمات مهندسی', icon: Sparkles, tag: 'سند' },
   ];
   const visibleAdvancedStudioItems = advancedStudioItems.filter(item => {
+    const infrastructureToolIds = new Set([
+      'accounting_verification',
+      'pre_launch_qa',
+      'stress_test',
+      'tenant_isolation',
+      'diagnostics'
+    ]);
+    if (infrastructureToolIds.has(item.id) && !import.meta.env.DEV) return false;
+    if (ISOLATED_ENGINEERING_MODULES.has(item.id)) return false;
+    if (item.id === 'admin_panel') return isPlatformOperator;
     if (PLATFORM_ONLY_MODULES.has(item.id) || FUTURE_RELEASE_MODULES.has(item.id)) {
       return isPlatformAdmin;
     }
@@ -309,6 +401,7 @@ const MainLayout: React.FC = () => {
     <div className={`min-h-screen flex flex-col font-sans transition-colors ${
       isDarkMode ? 'bg-[#0d1d22] text-[#e4f4f1]' : 'bg-slate-50 text-slate-800'
     }`} dir="rtl">
+      <PlatformImpersonationBanner />
       {/* Top Navbar */}
       <header className={`border-b sticky top-0 z-40 no-print ${
         isDarkMode ? 'bg-[#12272d] border-[#28545a]' : 'bg-white border-slate-200'
@@ -414,20 +507,22 @@ const MainLayout: React.FC = () => {
             </button>
           </div>
 
-          <div className="mb-3 px-1">
-            <button
-              onClick={() => handleToggleViewMode('desktop')}
-              className="w-full flex items-center justify-between p-2.5 rounded-xl bg-gradient-to-r from-[#b79a4a] to-[#2aa99d] text-white text-xs font-semibold shadow-sm hover:from-[#9f8439] hover:to-[#238e83] transition-all group"
-            >
-              <div className="flex items-center gap-2">
-                <Monitor className="w-4 h-4 text-white group-hover:scale-110 transition-transform" />
-                <span>میزکار دسکتاپ هابینو</span>
-              </div>
-              <span className="text-[10px] bg-white/20 text-white px-1.5 py-0.5 rounded border border-white/40">
-                OS
-              </span>
-            </button>
-          </div>
+          {ENABLE_OS_DESKTOP && (
+            <div className="mb-3 px-1">
+              <button
+                onClick={() => handleToggleViewMode('desktop')}
+                className="w-full flex items-center justify-between p-2.5 rounded-xl bg-gradient-to-r from-[#b79a4a] to-[#2aa99d] text-white text-xs font-semibold shadow-sm hover:from-[#9f8439] hover:to-[#238e83] transition-all group"
+              >
+                <div className="flex items-center gap-2">
+                  <Monitor className="w-4 h-4 text-white group-hover:scale-110 transition-transform" />
+                  <span>میزکار دسکتاپ هابینو</span>
+                </div>
+                <span className="text-[10px] bg-white/20 text-white px-1.5 py-0.5 rounded border border-white/40">
+                  OS
+                </span>
+              </button>
+            </div>
+          )}
 
           <nav className="space-y-4">
             {/* ۱. عملیات پایه و هسته حسابداری */}
@@ -638,7 +733,7 @@ const MainLayout: React.FC = () => {
               {activeTab === 'accounting_verification' && <AccountingVerificationStudio standalone={true} />}
               {activeTab === 'stress_test' && <StressTestEngineStudio standalone={true} />}
               {activeTab === 'agents_studio' && <LiveAgentDiagnosticStudio />}
-              {activeTab === 'admin_panel' && <HabinoAdminPanel onOpenLicenseManagement={() => setActiveTab('license')} />}
+              {activeTab === 'admin_panel' && <HabinoAdminPanel />}
               {activeTab === 'user_management' && <UserManagementView />}
               {activeTab === 'tenant_isolation' && <TenantIsolationVerificationStudio />}
               {activeTab === 'license' && <LicenseManager />}

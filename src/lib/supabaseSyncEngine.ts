@@ -180,6 +180,8 @@ export const normalizeSupabaseClientRow = (row: any, tenantId: string): Client =
       row.isBlockedForCredit === true || row.isBlockedForCredit === 'true' ||
       metadata.is_blocked_for_credit === true || metadata.is_blocked_for_credit === 'true' ||
       metadata.isBlockedForCredit === true || metadata.isBlockedForCredit === 'true';
+  const latitude = Number(metadata.lat ?? metadata.latitude ?? metadata.habino_latitude);
+  const longitude = Number(metadata.lng ?? metadata.longitude ?? metadata.habino_longitude);
 
   const createdAtCandidate = row.created_at || row.createdAt || row.updated_at || metadata?.habino_client_sync_at || new Date().toISOString();
   return {
@@ -188,6 +190,11 @@ export const normalizeSupabaseClientRow = (row: any, tenantId: string): Client =
     name: row.name || 'مشتری نامشخص',
     phone: row.phone || '',
     address: row.address || '',
+    postalCode: row.postal_code || row.postalCode || metadata.postalCode || '',
+    lat: Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 ? latitude : undefined,
+    lng: Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 ? longitude : undefined,
+    latitude: Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 ? latitude : undefined,
+    longitude: Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 ? longitude : undefined,
     nationalCode: row.national_code || row.national_id || row.nationalId || '',
     economicCode: row.economic_code || row.economicCode || '',
     balance: Number(row.balance || 0),
@@ -871,6 +878,8 @@ export class SupabaseSyncEngine {
         const meta = typeof row.metadata === 'string' 
           ? (() => { try { return JSON.parse(row.metadata); } catch { return {}; } })() 
           : (row.metadata || {});
+        const latitude = Number(meta.lat ?? meta.latitude ?? meta.habino_latitude);
+        const longitude = Number(meta.lng ?? meta.longitude ?? meta.habino_longitude);
         normalizedSettings = {
           name: row.name || meta.name || 'شرکت هابینو',
           ownerName: row.owner_name || row.ownerName || meta.ownerName || '',
@@ -882,6 +891,10 @@ export class SupabaseSyncEngine {
           email: row.email || meta.email || '',
           address: row.address || meta.address || '',
           postalCode: row.postal_code || row.postalCode || meta.postalCode || '',
+          lat: Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 ? latitude : undefined,
+          lng: Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 ? longitude : undefined,
+          latitude: Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 ? latitude : undefined,
+          longitude: Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 ? longitude : undefined,
           website: row.website || meta.website || '',
           currency: (row.currency || meta.currency || 'IRT') as CurrencyType,
           defaultTaxRate: Number(row.tax_rate ?? row.default_tax_rate ?? meta.defaultTaxRate ?? 10),
@@ -890,6 +903,10 @@ export class SupabaseSyncEngine {
           defaultInvoiceTemplate: row.default_template || row.template || meta.defaultInvoiceTemplate || 'professional',
           defaultInvoiceDesign: meta.defaultInvoiceDesign || row.design_config || row.default_invoice_design || undefined,
           openingPeriodStatus: meta.openingPeriodStatus || undefined,
+          allowSupportReadOnlyAccess: meta.allowSupportReadOnlyAccess === true,
+          supportAccessGrantedUntil: typeof meta.supportAccessGrantedUntil === 'string'
+            ? meta.supportAccessGrantedUntil
+            : undefined,
           guild: row.guild || meta.guild || 'services'
         };
       }
@@ -1741,6 +1758,10 @@ export class SupabaseSyncEngine {
         email: settings.email,
         address: settings.address,
         postalCode: settings.postalCode,
+        lat: settings.lat ?? settings.latitude,
+        lng: settings.lng ?? settings.longitude,
+        latitude: settings.lat ?? settings.latitude,
+        longitude: settings.lng ?? settings.longitude,
         website: settings.website,
         currency: settings.currency,
         defaultTaxRate: Number(settings.defaultTaxRate ?? 10),
@@ -1749,6 +1770,8 @@ export class SupabaseSyncEngine {
         defaultInvoiceTemplate: settings.defaultInvoiceTemplate,
         defaultInvoiceDesign: settings.defaultInvoiceDesign,
         openingPeriodStatus: settings.openingPeriodStatus,
+        allowSupportReadOnlyAccess: settings.allowSupportReadOnlyAccess === true,
+        supportAccessGrantedUntil: settings.supportAccessGrantedUntil || null,
         guild: settings.guild
       };
 
@@ -2006,6 +2029,13 @@ export class SupabaseSyncEngine {
           is_blocked_for_credit: Boolean(creditFields.isBlockedForCredit),
           metadata: {
             ...creditFields.metadata,
+            postalCode: clientData.postalCode || null,
+            lat: clientData.lat ?? clientData.latitude,
+            lng: clientData.lng ?? clientData.longitude,
+            latitude: clientData.lat ?? clientData.latitude,
+            longitude: clientData.lng ?? clientData.longitude,
+            habino_latitude: clientData.lat ?? clientData.latitude,
+            habino_longitude: clientData.lng ?? clientData.longitude,
             habino_credit_limit: creditFields.creditLimit,
             habino_is_blocked_for_credit: Boolean(creditFields.isBlockedForCredit),
             habino_client_sync_at: syncTimestamp

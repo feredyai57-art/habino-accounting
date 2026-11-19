@@ -1,4 +1,4 @@
-import { Client, Invoice, Transaction, AccountingEntry, Check, CompanySettings } from '../types';
+import { Client, Invoice, Transaction, AccountingEntry, Check, CompanySettings, CurrencyType } from '../types';
 import { formatCurrency, toPersianDigits } from './currencyUtils';
 export { ReportGenerationService, TenantReportSecurityException } from './reportGenerationService';
 
@@ -27,6 +27,46 @@ function escapeCsv(val: any): string {
   if (val === undefined || val === null) return '""';
   const str = String(val).replace(/"/g, '""');
   return `"${str}"`;
+}
+
+export function exportClientsDirectoryToCsv(
+  clients: Client[],
+  balances: ReadonlyMap<string, number>,
+  currency: CurrencyType,
+  includeFinancials: boolean
+): void {
+  const headers = [
+    'نام طرف‌حساب',
+    'نام شرکت',
+    'شماره تماس',
+    'نشانی',
+    'کد پستی',
+    'عرض جغرافیایی',
+    'طول جغرافیایی'
+  ];
+  if (includeFinancials) headers.push('مانده حساب', 'ماهیت مانده');
+
+  const rows = clients.map(client => {
+    const balance = balances.get(client.id) ?? client.balance ?? 0;
+    const row = [
+      client.name,
+      client.companyName || '',
+      client.phone || '',
+      client.address || '',
+      client.postalCode || '',
+      client.lat ?? client.latitude ?? '',
+      client.lng ?? client.longitude ?? ''
+    ];
+    if (includeFinancials) {
+      row.push(
+        formatCurrency(balance, currency),
+        balance > 0 ? 'بدهکار' : balance < 0 ? 'بستانکار' : 'تسویه'
+      );
+    }
+    return row.map(escapeCsv).join(',');
+  });
+
+  downloadCsvWithBom('habino-clients-directory.csv', [headers.map(escapeCsv).join(','), ...rows].join('\r\n'));
 }
 
 /**

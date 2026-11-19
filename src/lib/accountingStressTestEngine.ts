@@ -5,6 +5,7 @@ import {
   Client,
   Project,
   AccountingEntry,
+  BankAccount,
   TrialBalanceColumnMode,
   TrialBalanceLevel
 } from '../types';
@@ -108,6 +109,31 @@ export class AccountingStressTestEngine {
     { id: 'proj-stress-05', tenantId: 'tenant-stress-bench', title: 'طرح توسعه زیرساخت هوش صوتی سیناپس', status: 'in_progress', clientId: 'cli-stress-10', budget: 3500000000, startDate: '1403/05/01' }
   ];
 
+  public static readonly BENCHMARK_BANK_ACCOUNTS: BankAccount[] = [
+    {
+      id: 'bank-stress-cash',
+      tenantId: 'tenant-stress-bench',
+      accountType: 'cash',
+      accountCode: '10101',
+      accountTitle: 'صندوق مرکزی استرس‌تست',
+      bankName: 'صندوق نقدی',
+      accountNumber: 'CASH-STRESS-01',
+      balance: 5000000000,
+      holderName: 'صندوق مرکزی'
+    },
+    {
+      id: 'bank-stress-01',
+      tenantId: 'tenant-stress-bench',
+      accountType: 'bank',
+      accountCode: '10102',
+      accountTitle: 'بانک تجارت استرس‌تست',
+      bankName: 'بانک تجارت',
+      accountNumber: '1234567890',
+      balance: 5000000000,
+      holderName: 'حساب عملیاتی شرکت'
+    }
+  ];
+
   /**
    * متوقف کردن فرآیند استرس‌تست در صورت درخواست کاربر
    */
@@ -188,17 +214,36 @@ export class AccountingStressTestEngine {
     this.shouldAbort = false;
 
     // آماده‌سازی وضعیت ایزوله سندباکس برای محافظت از داده‌های اصلی
-    let workingState: FinancialStateSnapshot = initialState
-      ? HabinoAtomicTransactionWrapper.createSnapshot(initialState)
+    const baseSnapshot = initialState ? HabinoAtomicTransactionWrapper.createSnapshot(initialState) : null;
+    const tenantBenchmarkClients = this.BENCHMARK_CLIENTS.map(c => ({ ...c, tenantId }));
+    const tenantBenchmarkProjects = this.BENCHMARK_PROJECTS.map(p => ({ ...p, tenantId }));
+    const tenantBenchmarkBanks = this.BENCHMARK_BANK_ACCOUNTS.map(b => ({ ...b, tenantId }));
+
+    let workingState: FinancialStateSnapshot = baseSnapshot
+      ? {
+          ...baseSnapshot,
+          clients: [
+            ...baseSnapshot.clients,
+            ...tenantBenchmarkClients.filter(bc => !baseSnapshot.clients.some(c => c.id === bc.id))
+          ],
+          projects: [
+            ...baseSnapshot.projects,
+            ...tenantBenchmarkProjects.filter(bp => !baseSnapshot.projects.some(p => p.id === bp.id))
+          ],
+          bankAccounts: baseSnapshot.bankAccounts?.length
+            ? baseSnapshot.bankAccounts
+            : tenantBenchmarkBanks
+        }
       : {
           invoices: [],
           accountingEntries: [],
-          clients: JSON.parse(JSON.stringify(this.BENCHMARK_CLIENTS)),
+          clients: JSON.parse(JSON.stringify(tenantBenchmarkClients)),
           transactions: [],
           installments: [],
           checks: [],
-          projects: JSON.parse(JSON.stringify(this.BENCHMARK_PROJECTS)),
-          inventory: []
+          projects: JSON.parse(JSON.stringify(tenantBenchmarkProjects)),
+          inventory: [],
+          bankAccounts: JSON.parse(JSON.stringify(tenantBenchmarkBanks))
         };
 
     const latencies: number[] = [];
@@ -285,9 +330,13 @@ export class AccountingStressTestEngine {
 
           } else if (scenarioSelector === 3) {
             // ۲. پیش‌پرداخت پروژه با رعایت اصل ۶ (حساب کارفرما + برچسب پروژه، بدون حساب مستقل پروژه در دفتر کل)
+            const cashAccId = workingState.bankAccounts?.[1]?.id || workingState.bankAccounts?.[0]?.id || 'bank-stress-01';
             const advancePayload: Omit<Transaction, 'id'> = {
               tenantId,
               type: 'income',
+              purpose: 'customer_advance',
+              counterAccountCode: '20201',
+              cashAccountId: cashAccId,
               category: 'پیش‌پرداخت قرارداد',
               amount: grandTotal,
               date: docDate,
@@ -330,9 +379,13 @@ export class AccountingStressTestEngine {
 
           } else {
             // ۴. واریز مستقیم به حساب / وصول مطالبات تجاری (Direct Bank Transfer)
+            const cashAccId = workingState.bankAccounts?.[0]?.id || 'bank-stress-cash';
             const txPayload: Omit<Transaction, 'id'> = {
               tenantId,
               type: 'income',
+              purpose: 'receivable_collection',
+              counterAccountCode: '10201',
+              cashAccountId: cashAccId,
               category: 'وصول مطالبات تجاری',
               amount: grandTotal,
               date: docDate,
@@ -404,15 +457,16 @@ export class AccountingStressTestEngine {
           });
         }
 
-        // آزادسازی میکروتسک مرورگر جهت جلوگیری از فریز شدن صفحه و اجرای روان انیمیشن‌ها
-        await new Promise(resolve => setTimeout(resolve, 0));
+        if (onProgress) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
       }
 
     } finally {
       this.isRunning = false;
     }
 
-    const totalDurationMs = Math.round(performance.now() - overallStartTime);
+    const totalDurationMs = Math.max(1, Math.round(performance.now() - overallStartTime));
     const throughputTps = Math.round((processedCount / (totalDurationMs / 1000)) * 10) / 10;
     const latencyDistribution = this.calculateLatencyStats(latencies);
 

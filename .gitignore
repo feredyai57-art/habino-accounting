@@ -19,9 +19,4 @@ dev-dist/
 .vscode/
 .kilo/
 *.jpg
-*.sql
-*.json
-*.md
-*.py
-*.txt
 *.code-workspace

@@ -53,6 +53,30 @@ assert(batchPushRequiresVerifiedSuperAdmin, {
     : 'خطا: مسیر همگام‌سازی دسته‌ای ابری فاقد کنترل کامل نشست سوپراَدمین یا جداسازی مستأجر است.'
 });
 
+const impersonationRouteStart = serverSource.indexOf("app.post('/api/admin/impersonation/start'");
+const impersonationRouteEnd = serverSource.indexOf("\napp.post('/api/admin/licenses/issue'", impersonationRouteStart);
+const impersonationRouteSource = impersonationRouteStart >= 0
+  ? serverSource.slice(impersonationRouteStart, impersonationRouteEnd >= 0 ? impersonationRouteEnd : undefined)
+  : '';
+const suspensionGuardIndex = storeSource.indexOf("if (targetTenant.status === 'suspended')");
+const activeImpersonationGuardIndex = storeSource.indexOf('if (impersonationSession?.isActive)');
+const suspendedTenantObservationIsBlocked =
+  storeSource.includes('const targetTenant = tenantOverride || availableTenants.find(t => t.id === targetTenantId);') &&
+  suspensionGuardIndex >= 0 &&
+  activeImpersonationGuardIndex >= 0 &&
+  suspensionGuardIndex < activeImpersonationGuardIndex &&
+  impersonationRouteSource.includes(".select('id,status')") &&
+  impersonationRouteSource.includes("if (tenantRow.status === 'suspended')");
+
+assert(suspendedTenantObservationIsBlocked, {
+  id: 'SEC-IMPERSONATION-01',
+  name: 'جلوگیری از مشاهدهٔ فضای کاری معلق',
+  category: 'RLS_ISOLATION',
+  message: suspendedTenantObservationIsBlocked
+    ? 'تأیید شد: وضعیت تازهٔ مستأجر بررسی می‌شود و API سرور نیز مشاهدهٔ مستأجر معلق را رد می‌کند.'
+    : 'خطا: وضعیت معلق مستأجر به‌طور معتبر در مسیر مشاهدهٔ پشتیبانی مسدود نشده است.'
+});
+
 const projectsAreHiddenInGlobalAdminScope =
   /const isolatedProjects = useMemo\(\(\) => \{\s*if \(currentUser\?\.role === 'super_admin' && activeTenantId === 'all'\) return \[\];\s*return projects\.filter\(p => \(p\.tenantId \|\| 'tenant-main'\) === effectiveTenantId\);/s
     .test(storeSource);

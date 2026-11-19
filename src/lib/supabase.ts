@@ -29,7 +29,7 @@ let runtimeServerConfig: { url: string; key: string } | null = null;
  * Read the current Supabase configuration from all available sources
  */
 export const getSupabaseConfig = (): SupabaseConfigState => {
-  const metaEnv = (typeof import.meta !== 'undefined' && (import.meta as any).env) ? (import.meta as any).env : {};
+  const metaEnv = (import.meta.env || {}) as Record<string, string | undefined>;
   const procEnv = (typeof process !== 'undefined' && typeof process.env === 'object' && process.env !== null) ? process.env : {};
   const envUrl = normalizeSupabaseUrl(metaEnv.VITE_SUPABASE_URL || procEnv.VITE_SUPABASE_URL || '');
   const envKey = (metaEnv.VITE_SUPABASE_ANON_KEY || procEnv.VITE_SUPABASE_ANON_KEY || '').trim().replace(/['"]/g, '');

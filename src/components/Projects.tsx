@@ -40,6 +40,7 @@ import {
 import { HabinoDistributedLockManager } from '../lib/distributedLockEngine';
 import { getCurrentJalaliDate } from '../lib/dateUtils';
 import { CalendarJalaliDateInput } from './CalendarJalaliDateInput';
+import { OnlineAddressMapPicker } from './common/OnlineAddressMapPicker';
 
 export const Projects: React.FC = () => {
   const {
@@ -223,6 +224,8 @@ export const Projects: React.FC = () => {
   const [rfpBrand, setRfpBrand] = useState('Schneider Electric');
   const [rfpModel, setRfpModel] = useState('Acti9 iC60N');
   const [rfpLocation, setRfpLocation] = useState('تهران، شهرک صنعتی شمس‌آباد');
+  const [rfpLocationLatitude, setRfpLocationLatitude] = useState<number | undefined>();
+  const [rfpLocationLongitude, setRfpLocationLongitude] = useState<number | undefined>();
   const [rfpDuration, setRfpDuration] = useState<number>(30);
   const [rfpEstimatedBudget, setRfpEstimatedBudget] = useState<number>(145000000);
   const [rfpScope, setRfpScope] = useState('تأمین و سیم‌کشی تابلوهای توزیع برق اضطراری');
@@ -230,6 +233,8 @@ export const Projects: React.FC = () => {
   // Fix Ticket inputs
   const [fixBudget, setFixBudget] = useState(65000000);
   const [fixLocation, setFixLocation] = useState('تهران، خیابان سهروردی');
+  const [fixLocationLatitude, setFixLocationLatitude] = useState<number | undefined>();
+  const [fixLocationLongitude, setFixLocationLongitude] = useState<number | undefined>();
   const [fixScope, setFixScope] = useState('بازسازی کامل ویترین فروشگاه به متراژ ۴۵ متر مربع');
 
   // Submit New Dynamic RFP
@@ -249,6 +254,11 @@ export const Projects: React.FC = () => {
         brand: rfpBrand,
         model: rfpModel,
         location: rfpLocation,
+        locationLatitude: rfpLocationLatitude,
+        locationLongitude: rfpLocationLongitude,
+        locationCoordinates: rfpLocationLatitude !== undefined && rfpLocationLongitude !== undefined
+          ? { lat: rfpLocationLatitude, lng: rfpLocationLongitude }
+          : undefined,
         durationDays: Number(rfpDuration),
         estimatedBudget: Number(rfpEstimatedBudget),
         scope: rfpScope
@@ -1200,6 +1210,17 @@ export const Projects: React.FC = () => {
                       placeholder="تهران، شهرک صنعتی..."
                       className="w-full p-2 bg-white border rounded-xl"
                     />
+                    <OnlineAddressMapPicker
+                      value={rfpLocation}
+                      lat={rfpLocationLatitude}
+                      lng={rfpLocationLongitude}
+                      label="محل اجرای پروژه"
+                      onSelectAddress={payload => {
+                        setRfpLocation(payload.address);
+                        setRfpLocationLatitude(payload.lat);
+                        setRfpLocationLongitude(payload.lng);
+                      }}
+                    />
                   </div>
 
                   <div>
@@ -1279,6 +1300,17 @@ export const Projects: React.FC = () => {
                   onChange={e => setFixLocation(e.target.value)}
                   className="w-full p-2.5 bg-slate-50 border rounded-xl"
                 />
+                <OnlineAddressMapPicker
+                  value={fixLocation}
+                  lat={fixLocationLatitude}
+                  lng={fixLocationLongitude}
+                  label="محل اجرای پروژه"
+                  onSelectAddress={payload => {
+                    setFixLocation(payload.address);
+                    setFixLocationLatitude(payload.lat);
+                    setFixLocationLongitude(payload.lng);
+                  }}
+                />
               </div>
 
               <div>
@@ -1315,6 +1347,11 @@ export const Projects: React.FC = () => {
                 onClick={async () => {
                   await resolveTicket(fixTicketModal.rfpId, fixTicketModal.ticketId, {
                     location: fixLocation,
+                    locationLatitude: fixLocationLatitude,
+                    locationLongitude: fixLocationLongitude,
+                    locationCoordinates: fixLocationLatitude !== undefined && fixLocationLongitude !== undefined
+                      ? { lat: fixLocationLatitude, lng: fixLocationLongitude }
+                      : undefined,
                     estimatedBudget: fixBudget,
                     scope: fixScope
                   });

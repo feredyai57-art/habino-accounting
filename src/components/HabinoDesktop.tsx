@@ -21,6 +21,7 @@ import { UserManagementView } from './UserManagementView';
 import { LoginModal } from './LoginModal';
 import { UpgradeModal } from './UpgradeModal';
 import { PLATFORM_ONLY_MODULES, ROLE_DETAILS_FA } from '../lib/authEngine';
+import { PlatformImpersonationBanner } from './PlatformImpersonationBanner';
 import { Dashboard } from './Dashboard';
 import { LicenseManager } from './LicenseManager';
 import { BackupManager } from './BackupManager';
@@ -39,7 +40,6 @@ import { DataSourceSyncBadge } from './DataSourceSyncBadge';
 import { OfflineIndicator } from './OfflineIndicator';
 import { SecurityGate } from './common/SecurityGates';
 import { isModuleRelevantToGuild } from '../lib/moduleVisibility';
-
 import {
   LayoutDashboard,
   BarChart3,
@@ -92,6 +92,15 @@ import {
   AlertTriangle
 } from 'lucide-react';
 
+const RND_AND_SYSTEM_MODULES = new Set([
+  'roadmap', 'diagnostics', 'supabase_tester', 'pre_launch_qa',
+  'accounting_verification', 'agents_studio', 'stress_test', 'tenant_isolation'
+]);
+const TENANT_ACCOUNTING_MODULES = new Set([
+  'invoices', 'checks', 'installments', 'transactions', 'clients', 'inventory',
+  'barcode_scanner', 'banks', 'projects', 'payroll', 'ledger', 'reports'
+]);
+
 export interface OpenWindow {
   id: string;
   moduleId: string;
@@ -119,9 +128,13 @@ export const HabinoDesktop: React.FC<HabinoDesktopProps> = ({ onSwitchToClassicV
     isOnline,
     currentUser,
     activeTenant,
+    impersonationSession,
     license,
     canAccessModule
   } = useAccounting();
+  const isPlatformControlPlane = (
+    currentUser?.role === 'super_admin' || currentUser?.role === 'hubino_support'
+  ) && !impersonationSession?.isActive;
 
   const [upgradeModalOpen, setUpgradeModalOpen] = useState<boolean>(false);
   const [themePreference, setThemePreference] = useState<'auto' | 'light' | 'dark'>(() => {
@@ -456,9 +469,19 @@ export const HabinoDesktop: React.FC<HabinoDesktopProps> = ({ onSwitchToClassicV
     }
   }, [windows, activeWindowId, currentUser?.id, currentUser?.role, activeTenant?.guildType]);
 
-  const visibleApps = apps.filter(app =>
-    app.id === 'landing_portal' || canShowModule(app.id)
-  );
+  const controlPlaneApps = new Set(['admin_panel', 'landing_portal', 'settings']);
+  const visibleApps = apps.filter(app => {
+    if (isPlatformControlPlane) {
+      return controlPlaneApps.has(app.id) &&
+        !TENANT_ACCOUNTING_MODULES.has(app.id) &&
+        !RND_AND_SYSTEM_MODULES.has(app.id);
+    }
+    return !RND_AND_SYSTEM_MODULES.has(app.id) &&
+      (import.meta.env.DEV || ![
+        'diagnostics', 'supabase_tester', 'pre_launch_qa', 'accounting_verification', 'stress_test', 'tenant_isolation'
+      ].includes(app.id)) &&
+      (app.id === 'landing_portal' || canShowModule(app.id));
+  });
   const desktopApps = desktopPinnedIds
     .map(id => visibleApps.find(app => app.id === id))
     .filter((app): app is typeof visibleApps[number] => Boolean(app));
@@ -478,7 +501,7 @@ export const HabinoDesktop: React.FC<HabinoDesktopProps> = ({ onSwitchToClassicV
     invoice.status !== 'cancelled' &&
     (invoice.remainingAmount || 0) > 0
   );
-  const availableDesktopWidgets = [
+  const availableDesktopWidgets = isPlatformControlPlane ? [] : [
     {
       id: legacyFinancialWidgetId,
       title: 'موجودی بانک و چک‌های در جریان',
@@ -1007,7 +1030,7 @@ export const HabinoDesktop: React.FC<HabinoDesktopProps> = ({ onSwitchToClassicV
       case 'user_management':
         return <UserManagementView />;
       case 'admin_panel':
-        return <HabinoAdminPanel onOpenLicenseManagement={() => openApp('license')} />;
+        return <HabinoAdminPanel />;
       case 'roadmap':
         return <RoadmapStudio />;
       case 'hub':
@@ -1054,6 +1077,7 @@ export const HabinoDesktop: React.FC<HabinoDesktopProps> = ({ onSwitchToClassicV
         }
       }}
     >
+      <PlatformImpersonationBanner />
       {/* Desktop wallpaper */}
       <div className={`absolute inset-0 pointer-events-none ${
         isDarkMode
